@@ -1,6 +1,8 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestDeserializeSimpleString(t *testing.T) {
 	var tests = []struct {
@@ -231,6 +233,46 @@ func TestIsNullBulkString(t *testing.T) {
 			ans, _ := isNullBulkString(test.input)
 			if ans != test.want {
 				t.Errorf("Got '%v' but expected '%v'.", ans, test.want)
+			}
+		})
+	}
+}
+
+func TestDeserializeNullOrArray(t *testing.T) {
+	var tests = []struct {
+		name  string
+		input string
+		want  []interface{}
+	}{
+		// the table itself
+		{"Should deserialize array", "*2\r\n$4\r\necho\r\n$11\r\nhello world\r\n", []interface{}{"echo", "hello world"}},
+		{"Should deserialize multi-type array", "*4\r\n:+123\r\n-ERR\r\n+OK\r\n$-1\r\n", []interface{}{123, "ERR", "OK", nil}},
+		{"Should deserialize empty array", "*0\r\n", []interface{}{}},
+		{"Should deserialize nil array", "*-1\r\n", nil},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ans, _, err := deserializeNullOrArray(test.input)
+			if err != nil {
+				t.Errorf("%v", err)
+			}
+
+			if test.want == nil && ans == nil {
+				return
+			}
+
+			if ans == nil {
+				t.Errorf("Unexpected null array.")
+			}
+
+			if len(ans.([]interface{})) != len(test.want) {
+				t.Errorf("Got array of len '%d' but expected '%d'.", len(ans.([]interface{})), len(test.want))
+			}
+			for i := 0; i < len(ans.([]interface{})); i++ {
+				if ans.([]interface{})[i] != test.want[i] {
+					t.Errorf("Got '%s' but expected '%s'.", ans, test.want)
+				}
 			}
 		})
 	}
