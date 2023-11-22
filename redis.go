@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net"
+	"os"
 	"strconv"
 )
 
@@ -176,7 +178,6 @@ func deserializeArray(message string) ([]interface{}, int, error) {
 	arr := make([]interface{}, length)
 	for idx := 0; idx < int(length); idx++ {
 		val, s, err := deserializePrimitive(message[i:])
-		fmt.Println("returned primitive", val, s)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -184,7 +185,6 @@ func deserializeArray(message string) ([]interface{}, int, error) {
 		i += s
 		arr[idx] = val
 	}
-	fmt.Println("returning array", arr)
 	return arr, i - start, nil
 }
 
@@ -202,8 +202,60 @@ func deserializePrimitive(message string) (interface{}, int, error) {
 	return nil, 0, fmt.Errorf("Expected a primitive to deserialize, but received unsupported type: '%c'", message[0])
 }
 
+func handleRequest(conn net.Conn) {
+	defer conn.Close()
+
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		fmt.Println("Error reading:", err.Error())
+	}
+
+	// deserialize command
+	input, _, err := deserializeNullOrArray(string(buf[:n]))
+	if err != nil {
+		msg, _, _ := serializeSimpleError("ERR - failed while deserializing input.")
+		conn.Write([]byte(msg))
+	}
+
+	if input == nil {
+		fmt.Println("Received nil array.")
+	} else {
+		if arr, ok := input.([]interface{}); ok {
+			switch arr[0] {
+			case "PING":
+				if len(arr) > 1 {
+					msg, _, _ := serializeBulkString(arr[1].(string))
+					conn.Write([]byte(msg))
+				} else {
+					msg, _, _ := serializeBulkString("PONG")
+					conn.Write([]byte(msg))
+				}
+			default:
+				fmt.Printf("Received message: %v\n", arr)
+			}
+		}
+	}
+}
+
 func main() {
-	str, _, err := deserializeBulkString("$5\r\nhello\r\n")
-	fmt.Println(str)
-	fmt.Println(err)
+	listener, err := net.Listen("tcp", "0.0.0.0:6379")
+	if err != nil {
+		fmt.Println("Error listening:", err.Error())
+		os.Exit(1)
+	}
+	// Close the listener when the application closes
+	defer listener.Close()
+	fmt.Println("Listening on 0.0.0.0:6379")
+
+	for {
+		// Accept a connection
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Println("Error accepting: ", err.Error())
+			os.Exit(1)
+		}
+		// handle connection in blocking mode.
+		handleRequest(conn)
+	}
 }
