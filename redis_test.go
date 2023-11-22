@@ -169,3 +169,69 @@ func TestSerializeInteger(t *testing.T) {
 		})
 	}
 }
+
+func TestDeserializeBulkString(t *testing.T) {
+	var tests = []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// the table itself
+		{"Should deserialize bulk string 'OK'", "$2\r\nOK\r\n", "OK"},
+		{"Should deserialize bulk string 'Hello World'", "$11\r\nHello World\r\n", "Hello World"},
+		{"Should deserialize long bulk string", "$72\r\nThis is a long bulk string with multiple words and \n special characters.\r\n", "This is a long bulk string with multiple words and \n special characters."},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ans, _, _ := deserializeBulkString(test.input)
+			if ans != test.want {
+				t.Errorf("Got '%s' but expected '%s'.", ans, test.want)
+			}
+		})
+	}
+}
+
+func TestSerializeBulkString(t *testing.T) {
+	var tests = []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// the table itself
+		{"Should serialize 'OK'", "OK", "$2\r\nOK\r\n"},
+		{"Should serialize empty string", "", "$0\r\n\r\n"},
+		{"Should serialize 'Hello World'", "Hello World", "$11\r\nHello World\r\n"},
+		{"Should serialize string with special chars", "Hello\nWorld", "$11\r\nHello\nWorld\r\n"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ans, _, _ := serializeBulkString(test.input)
+			if ans != test.want {
+				t.Errorf("Got '%s' but expected '%s'.", ans, test.want)
+			}
+		})
+	}
+}
+
+func TestIsNullBulkString(t *testing.T) {
+	var tests = []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		// the table itself
+		{"Should detect null string", "$-1\r\n", true},
+		{"Should detect normal string", "$11\r\nHello World\r\n", false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ans, _ := isNullBulkString(test.input)
+			if ans != test.want {
+				t.Errorf("Got '%v' but expected '%v'.", ans, test.want)
+			}
+		})
+	}
+}
