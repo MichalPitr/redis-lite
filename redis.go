@@ -231,6 +231,9 @@ func handleRequest(conn net.Conn) {
 					msg, _, _ := serializeBulkString("PONG")
 					conn.Write([]byte(msg))
 				}
+			case "ECHO":
+				msg, _, _ := serializeBulkString(arr[1].(string))
+				conn.Write(([]byte(msg)))
 			default:
 				fmt.Printf("Received message: %v\n", arr)
 			}
