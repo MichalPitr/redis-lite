@@ -153,6 +153,14 @@ func deserializeNullOrArray(message string) (interface{}, int, error) {
 	return deserializeArray(message)
 }
 
+func serializeNullArray() (string, int, error) {
+	return "*-1\r\n", 5, nil
+}
+
+func serializeNullBulkString() (string, int, error) {
+	return "$-1\r\n", 5, nil
+}
+
 func deserializeArray(message string) ([]interface{}, int, error) {
 	if message[0] != '*' {
 		return []interface{}{}, 0, fmt.Errorf("Expected array to begin with '*' but got '%c'", message[0])
@@ -202,7 +210,7 @@ func deserializePrimitive(message string) (interface{}, int, error) {
 	return nil, 0, fmt.Errorf("Expected a primitive to deserialize, but received unsupported type: '%c'", message[0])
 }
 
-func handleRequest(conn net.Conn) {
+func handleRequest(conn net.Conn, dict *map[string]string) {
 	defer conn.Close()
 
 	buf := make([]byte, 1024)
@@ -224,16 +232,44 @@ func handleRequest(conn net.Conn) {
 		if arr, ok := input.([]interface{}); ok {
 			switch arr[0] {
 			case "PING":
-				if len(arr) > 1 {
+				if len(arr) == 1 {
+					msg, _, _ := serializeBulkString("PONG")
+					conn.Write([]byte(msg))
+				}
+				if len(arr) == 2 {
 					msg, _, _ := serializeBulkString(arr[1].(string))
 					conn.Write([]byte(msg))
 				} else {
-					msg, _, _ := serializeBulkString("PONG")
+					msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'ping' command")
 					conn.Write([]byte(msg))
 				}
 			case "ECHO":
 				msg, _, _ := serializeBulkString(arr[1].(string))
 				conn.Write(([]byte(msg)))
+			case "SET":
+				if len(arr) != 3 {
+					msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
+					conn.Write(([]byte(msg)))
+					return
+				}
+				(*dict)[arr[1].(string)] = arr[2].(string)
+				msg, _, _ := serializeSimpleString("OK")
+				conn.Write(([]byte(msg)))
+			case "GET":
+				if len(arr) != 2 {
+					msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
+					conn.Write(([]byte(msg)))
+					return
+				}
+				val, ok := (*dict)[arr[1].(string)]
+				if ok == false {
+					msg, _, _ := serializeNullArray()
+					conn.Write(([]byte(msg)))
+					return
+				}
+				msg, _, _ := serializeBulkString(val)
+				conn.Write(([]byte(msg)))
+				return
 			default:
 				fmt.Printf("Received message: %v\n", arr)
 			}
@@ -251,14 +287,17 @@ func main() {
 	defer listener.Close()
 	fmt.Println("Listening on 0.0.0.0:6379")
 
+	// TODO: Will need to handle race-conditions, so probably use mutex when supporting concurrent connections.
+	dict := map[string]string{}
+
 	for {
-		// Accept a connection
+		// Accept a connection\\
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		// handle connection in blocking mode.
-		handleRequest(conn)
+		// TODO: Add concurrent connections.
+		handleRequest(conn, &dict)
 	}
 }
