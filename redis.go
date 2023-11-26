@@ -213,65 +213,71 @@ func deserializePrimitive(message string) (interface{}, int, error) {
 func handleRequest(conn net.Conn, dict *map[string]string) {
 	defer conn.Close()
 
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil {
-		fmt.Println("Error reading:", err.Error())
-	}
+	for {
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			fmt.Println("Error reading:", err.Error())
+			return
+		}
 
-	// deserialize command
-	input, _, err := deserializeNullOrArray(string(buf[:n]))
-	if err != nil {
-		msg, _, _ := serializeSimpleError("ERR - failed while deserializing input.")
-		conn.Write([]byte(msg))
-	}
+		// deserialize command
+		input, _, err := deserializeNullOrArray(string(buf[:n]))
+		if err != nil {
+			msg, _, _ := serializeSimpleError("ERR - failed while deserializing input.")
+			conn.Write([]byte(msg))
+		}
 
-	if input == nil {
-		fmt.Println("Received nil array.")
-	} else {
-		if arr, ok := input.([]interface{}); ok {
-			switch arr[0] {
-			case "PING":
-				if len(arr) == 1 {
-					msg, _, _ := serializeBulkString("PONG")
-					conn.Write([]byte(msg))
-				}
-				if len(arr) == 2 {
+		if input == nil {
+			fmt.Println("Received nil array.")
+		} else {
+			if arr, ok := input.([]interface{}); ok {
+				switch arr[0] {
+				case "PING", "ping":
+					if len(arr) == 1 {
+						msg, _, _ := serializeBulkString("PONG")
+						conn.Write([]byte(msg))
+					}
+					if len(arr) == 2 {
+						msg, _, _ := serializeBulkString(arr[1].(string))
+						conn.Write([]byte(msg))
+					} else {
+						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'ping' command")
+						conn.Write([]byte(msg))
+					}
+				case "ECHO", "echo":
 					msg, _, _ := serializeBulkString(arr[1].(string))
-					conn.Write([]byte(msg))
-				} else {
-					msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'ping' command")
-					conn.Write([]byte(msg))
-				}
-			case "ECHO":
-				msg, _, _ := serializeBulkString(arr[1].(string))
-				conn.Write(([]byte(msg)))
-			case "SET":
-				if len(arr) != 3 {
-					msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
 					conn.Write(([]byte(msg)))
-					return
-				}
-				(*dict)[arr[1].(string)] = arr[2].(string)
-				msg, _, _ := serializeSimpleString("OK")
-				conn.Write(([]byte(msg)))
-			case "GET":
-				if len(arr) != 2 {
-					msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
+				case "SET", "set":
+					if len(arr) != 3 {
+						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
+						conn.Write(([]byte(msg)))
+						continue
+					}
+					(*dict)[arr[1].(string)] = arr[2].(string)
+					msg, _, _ := serializeSimpleString("OK")
 					conn.Write(([]byte(msg)))
-					return
-				}
-				val, ok := (*dict)[arr[1].(string)]
-				if ok == false {
-					msg, _, _ := serializeNullArray()
+				case "GET", "get":
+					if len(arr) != 2 {
+						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
+						conn.Write(([]byte(msg)))
+						continue
+					}
+					val, ok := (*dict)[arr[1].(string)]
+					if ok == false {
+						msg, _, _ := serializeNullArray()
+						conn.Write(([]byte(msg)))
+						continue
+					}
+					msg, _, _ := serializeBulkString(val)
 					conn.Write(([]byte(msg)))
-					return
+					continue
+				default:
+					fmt.Printf("-Err unk command '%v'\n", arr[0].(string))
+					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
+					conn.Write(([]byte(msg)))
+					continue
 				}
-				msg, _, _ := serializeBulkString(val)
-				conn.Write(([]byte(msg)))
-				return
-			default:
-				fmt.Printf("Received message: %v\n", arr)
 			}
 		}
 	}

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"testing"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestDeserializeSimpleString(t *testing.T) {
@@ -275,5 +278,30 @@ func TestDeserializeNullOrArray(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSetGet(t *testing.T) {
+	// Start server
+	go main()
+
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "key", "value", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	val, err := rdb.Get(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if val != "value" {
+		t.Errorf("Got '%s' but expected '%s'", val, "value")
 	}
 }
