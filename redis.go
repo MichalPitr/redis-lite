@@ -202,7 +202,6 @@ func deserializeArray(message string) ([]interface{}, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		// fmt.Println("returned", val, s)
 		i += s
 		arr[idx] = val
 	}
@@ -227,10 +226,9 @@ func handleRequest(conn net.Conn, store *Store) {
 	defer conn.Close()
 
 	for {
-		buf := make([]byte, 1024)
+		buf := make([]byte, 2048)
 		n, err := conn.Read(buf)
 		if err != nil {
-			fmt.Println("Error reading:", err.Error())
 			return
 		}
 
@@ -269,9 +267,9 @@ func handleRequest(conn net.Conn, store *Store) {
 					}
 					// Handle access to shared store used by other go-routines.
 					(*store).mu.Lock()
-					defer (*store).mu.Unlock()
-
 					(*store).dict[arr[1].(string)] = arr[2].(string)
+					(*store).mu.Unlock()
+
 					msg, _, _ := serializeSimpleString("OK")
 					conn.Write(([]byte(msg)))
 				case "GET", "get":
@@ -280,8 +278,12 @@ func handleRequest(conn net.Conn, store *Store) {
 						conn.Write(([]byte(msg)))
 						continue
 					}
+
 					// Handle access to shared store used by other go-routines.
+					(*store).mu.Lock()
 					val, ok := (*store).dict[arr[1].(string)]
+					(*store).mu.Unlock()
+
 					if ok == false {
 						msg, _, _ := serializeNullArray()
 						conn.Write(([]byte(msg)))
