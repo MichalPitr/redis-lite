@@ -2,10 +2,22 @@ package main
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
 )
+
+func TestMain(m *testing.M) {
+	// Setup the server
+	go main()
+
+	// Run the tests
+	code := m.Run()
+
+	// Exit
+	os.Exit(code)
+}
 
 func TestDeserializeSimpleString(t *testing.T) {
 	var tests = []struct {
@@ -282,9 +294,6 @@ func TestDeserializeNullOrArray(t *testing.T) {
 }
 
 func TestSetGet(t *testing.T) {
-	// Start server
-	go main()
-
 	ctx := context.Background()
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
@@ -303,5 +312,59 @@ func TestSetGet(t *testing.T) {
 	}
 	if val != "value" {
 		t.Errorf("Got '%s' but expected '%s'", val, "value")
+	}
+}
+
+func TestGetNonExistant(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	_, err := rdb.Get(ctx, "keyDoesNotExist").Result()
+	if err != nil {
+		if err != redis.Nil {
+			t.Error("Key exists when it shouldn't.")
+		}
+	} else {
+		t.Error("Expected an error, but didn't get any.")
+	}
+}
+
+func TestPing(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	res, err := rdb.Ping(ctx).Result()
+	if err != nil {
+		t.Error(err)
+	}
+
+	if res != "PONG" {
+		t.Errorf("Expected 'PONG' but got '%s'", res)
+	}
+}
+
+func TestEcho(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	res, err := rdb.Echo(ctx, "Hello World!").Result()
+	if err != nil {
+		t.Error(err)
+	}
+
+	if res != "Hello World!" {
+		t.Errorf("Expected 'PONG' but got '%s'", res)
 	}
 }

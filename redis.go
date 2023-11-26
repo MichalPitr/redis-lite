@@ -5,7 +5,20 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 )
+
+type Store struct {
+	mu   sync.Mutex
+	dict map[string]string
+}
+
+func newStore() *Store {
+	store := &Store{
+		dict: map[string]string{},
+	}
+	return store
+}
 
 func deserialize(message string) (interface{}, int, error) {
 	return nil, 0, nil
@@ -210,7 +223,7 @@ func deserializePrimitive(message string) (interface{}, int, error) {
 	return nil, 0, fmt.Errorf("Expected a primitive to deserialize, but received unsupported type: '%c'", message[0])
 }
 
-func handleRequest(conn net.Conn, dict *map[string]string) {
+func handleRequest(conn net.Conn, store *Store) {
 	defer conn.Close()
 
 	for {
@@ -254,7 +267,11 @@ func handleRequest(conn net.Conn, dict *map[string]string) {
 						conn.Write(([]byte(msg)))
 						continue
 					}
-					(*dict)[arr[1].(string)] = arr[2].(string)
+					// Handle access to shared store used by other go-routines.
+					(*store).mu.Lock()
+					defer (*store).mu.Unlock()
+
+					(*store).dict[arr[1].(string)] = arr[2].(string)
 					msg, _, _ := serializeSimpleString("OK")
 					conn.Write(([]byte(msg)))
 				case "GET", "get":
@@ -263,7 +280,8 @@ func handleRequest(conn net.Conn, dict *map[string]string) {
 						conn.Write(([]byte(msg)))
 						continue
 					}
-					val, ok := (*dict)[arr[1].(string)]
+					// Handle access to shared store used by other go-routines.
+					val, ok := (*store).dict[arr[1].(string)]
 					if ok == false {
 						msg, _, _ := serializeNullArray()
 						conn.Write(([]byte(msg)))
@@ -273,7 +291,6 @@ func handleRequest(conn net.Conn, dict *map[string]string) {
 					conn.Write(([]byte(msg)))
 					continue
 				default:
-					fmt.Printf("-Err unk command '%v'\n", arr[0].(string))
 					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
 					conn.Write(([]byte(msg)))
 					continue
@@ -294,7 +311,7 @@ func main() {
 	fmt.Println("Listening on 0.0.0.0:6379")
 
 	// TODO: Will need to handle race-conditions, so probably use mutex when supporting concurrent connections.
-	dict := map[string]string{}
+	store := newStore()
 
 	for {
 		// Accept a connection\\
@@ -303,7 +320,6 @@ func main() {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		// TODO: Add concurrent connections.
-		handleRequest(conn, &dict)
+		go handleRequest(conn, store)
 	}
 }
