@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -309,7 +310,7 @@ func handleRequest(conn net.Conn, store *Store) {
 						(*store).dict[arr[1].(string)] = val
 					}
 					num, err := strconv.ParseInt(val.value, 10, 64)
-					if err != nil {
+					if err != nil || num >= math.MaxInt64 {
 						msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
 						conn.Write([]byte(msg))
 						continue

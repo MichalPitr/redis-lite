@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -585,6 +587,27 @@ func TestIncr(t *testing.T) {
 	}
 	if res != 2 {
 		t.Errorf("Expected 2 but got '%d'", res)
+	}
+}
+
+func TestIncrOutOfRange(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	// Start with maximum value that is allowed.
+	err := rdb.Set(ctx, "key", fmt.Sprint(math.MaxInt64), 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Increment would overflow - we want to prevent that
+	_, err = rdb.Incr(ctx, "key").Result()
+	if err == nil {
+		t.Error("Expected an error bur didn't get any")
 	}
 }
 
