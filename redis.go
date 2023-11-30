@@ -232,6 +232,7 @@ func handleRequest(conn net.Conn, store *Store) {
 
 		// deserialize command
 		input, _, err := deserializeNullOrArray(string(buf[:n]))
+		fmt.Println("input: ", input)
 		if err != nil {
 			msg, _, _ := serializeSimpleError("ERR - failed while deserializing input.")
 			conn.Write([]byte(msg))
@@ -263,6 +264,20 @@ func handleRequest(conn net.Conn, store *Store) {
 				case "GET", "get":
 					// Handle access to shared store used by other go-routines.
 					handleGet(arr, conn, store)
+				case "EXISTS", "exists":
+					if len(arr) < 2 {
+						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'exists' command")
+						conn.Write([]byte(msg))
+						continue
+					}
+					count := 0
+					for _, key := range arr[1:] {
+						if _, ok := (*store).dict[key.(string)]; ok {
+							count++
+						}
+					}
+					msg, _, _ := serializeInteger(count)
+					conn.Write([]byte(msg))
 				default:
 					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
 					conn.Write(([]byte(msg)))

@@ -500,3 +500,46 @@ func TestEcho(t *testing.T) {
 		t.Errorf("Expected 'PONG' but got '%s'", res)
 	}
 }
+
+func TestExistsNoSuchKey(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	res, err := rdb.Exists(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if res != 0 {
+		t.Errorf("Expected 0 keys but got '%d'", res)
+	}
+}
+
+func TestExists(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "key", "value", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+	err = rdb.Set(ctx, "anotherKey", "anotherValue", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	res, err := rdb.Exists(ctx, "key", "anotherKey").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if res != 2 {
+		t.Errorf("Expected 2 keys but got '%d'", res)
+	}
+}
