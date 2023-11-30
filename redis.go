@@ -26,14 +26,6 @@ func newStore() *Store {
 	return store
 }
 
-func deserialize(message string) (interface{}, int, error) {
-	return nil, 0, nil
-}
-
-func serialize() {
-	return
-}
-
 // +OK\r\n
 func deserializeSimpleString(message string) (string, int, error) {
 	if message[0] != '+' {
@@ -331,15 +323,51 @@ func handleSet(arr []interface{}, conn net.Conn, store *Store) {
 				conn.Write(([]byte(msg)))
 				return
 			}
+			if durationSeconds <= 0 {
+				msg, _, _ := serializeSimpleError("ERR 'EX' option has to be positive")
+				conn.Write(([]byte(msg)))
+				return
+			}
 			expiryTimestamp = time.Now().UnixMilli() + durationSeconds*1000
 		case "PX", "px":
 			durationMilli, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _, _ := serializeSimpleError("ERR 'EX' arguments has to be integer")
+				msg, _, _ := serializeSimpleError("ERR 'PX' arguments has to be integer")
+				conn.Write(([]byte(msg)))
+				return
+			}
+			if durationMilli <= 0 {
+				msg, _, _ := serializeSimpleError("ERR 'PX' option has to be positive")
 				conn.Write(([]byte(msg)))
 				return
 			}
 			expiryTimestamp = time.Now().UnixMilli() + durationMilli
+		case "EXAT", "exat":
+			unixSeconds, err := strconv.ParseInt(arr[4].(string), 10, 64)
+			if err != nil {
+				msg, _, _ := serializeSimpleError("ERR 'EXAT' arguments has to be integer")
+				conn.Write(([]byte(msg)))
+				return
+			}
+			if unixSeconds <= 0 {
+				msg, _, _ := serializeSimpleError("ERR 'EXAT' option has to be positive")
+				conn.Write(([]byte(msg)))
+				return
+			}
+			expiryTimestamp = unixSeconds * 1000
+		case "PXAT", "pxat":
+			unixMilli, err := strconv.ParseInt(arr[4].(string), 10, 64)
+			if err != nil {
+				msg, _, _ := serializeSimpleError("ERR 'PXAT' arguments has to be integer")
+				conn.Write(([]byte(msg)))
+				return
+			}
+			if unixMilli <= 0 {
+				msg, _, _ := serializeSimpleError("ERR 'PXAT' option has to be positive")
+				conn.Write(([]byte(msg)))
+				return
+			}
+			expiryTimestamp = unixMilli
 		default:
 			msg, _, _ := serializeSimpleError("ERR unknown option for SET")
 			conn.Write(([]byte(msg)))
@@ -359,6 +387,41 @@ func handleSet(arr []interface{}, conn net.Conn, store *Store) {
 	conn.Write(([]byte(msg)))
 }
 
+// TODO: Maybe have to use mutex, but then we block the store for quite a long time.
+func activeKeyExpirer(store *Store) {
+	// get keys
+	for {
+		expired := 0
+		total := 0
+		keys := make([]string, 0)
+		(*store).mu.Lock()
+		for k, v := range (*store).dict {
+			if v.expiryTimestamp == -1 {
+				continue
+			}
+			if recordExpired(v.expiryTimestamp) {
+				expired++
+				keys = append(keys, k)
+			}
+			total++
+
+			if total >= 20 {
+				break
+			}
+		}
+
+		for _, k := range keys {
+			delete((*store).dict, k)
+		}
+
+		(*store).mu.Unlock()
+
+		if float64(expired)/float64(total) < 0.25 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
 func main() {
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -369,8 +432,10 @@ func main() {
 	defer listener.Close()
 	fmt.Println("Listening on 0.0.0.0:6379")
 
-	// TODO: Will need to handle race-conditions, so probably use mutex when supporting concurrent connections.
 	store := newStore()
+
+	// start active key expirer
+	go activeKeyExpirer(store)
 
 	for {
 		// Accept a connection\\

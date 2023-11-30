@@ -375,7 +375,75 @@ func TestSetGetPx(t *testing.T) {
 	// Confirm that value was set
 	val, err = rdb.Get(ctx, "key").Result()
 	if err.Error() != "redis: nil" {
-		t.Error("Expected nil but got ")
+		t.Error("Expected nil")
+	}
+}
+
+func TestSetGetExat(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	// Set expriration 2 seconds from now.
+	expireUnixTime := int64(time.Now().Unix() + 2)
+
+	// Using EXAT, Go client does not have helper for EXAT.
+	_, err := rdb.Do(ctx, "SET", "key", "value", "EXAT", expireUnixTime).Result()
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Confirm that value was set
+	val, err := rdb.Get(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if val != "value" {
+		t.Errorf("Got '%s' but expected '%s'", val, "value")
+	}
+
+	// Confirm that value was reset
+	time.Sleep(2 * time.Second)
+	val, err = rdb.Get(ctx, "key").Result()
+	if err == nil || err.Error() != "redis: nil" {
+		t.Error("Expected nil")
+	}
+}
+
+func TestSetGetPxat(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	// Set expriration 500ms from now.
+	expireUnixTime := int64(time.Now().UnixMilli() + 500)
+
+	// Go client does not have helper for PXAT.
+	_, err := rdb.Do(ctx, "SET", "key", "value", "PXAT", expireUnixTime).Result()
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Confirm that value was set.
+	val, err := rdb.Get(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if val != "value" {
+		t.Errorf("Got '%s' but expected '%s'", val, "value")
+	}
+
+	// Confirm that value was reset
+	time.Sleep(500 * time.Millisecond)
+	val, err = rdb.Get(ctx, "key").Result()
+	if err == nil || err.Error() != "redis: nil" {
+		t.Errorf("Expected nil but got '%s'", err)
 	}
 }
 
