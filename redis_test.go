@@ -340,6 +340,43 @@ func TestSetGetEx(t *testing.T) {
 
 	// Wait for 2 seconds to confirm that value was reset.
 	time.Sleep(2 * time.Second)
+	// Confirm that value was set
+	val, err = rdb.Get(ctx, "key").Result()
+	if err.Error() != "redis: nil" {
+		t.Error("Expected nil but got ")
+	}
+}
+
+func TestSetGetPx(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	// Set expriration of 500ms
+	err := rdb.Set(ctx, "key", "value", 500*time.Millisecond).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Confirm that value was set
+	val, err := rdb.Get(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if val != "value" {
+		t.Errorf("Got '%s' but expected '%s'", val, "value")
+	}
+
+	// Wait for 500ms to confirm that value was reset.
+	time.Sleep(500 * time.Millisecond)
+	// Confirm that value was set
+	val, err = rdb.Get(ctx, "key").Result()
+	if err.Error() != "redis: nil" {
+		t.Error("Expected nil but got ")
+	}
 }
 
 func TestGetNonExistant(t *testing.T) {

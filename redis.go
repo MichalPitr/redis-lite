@@ -312,7 +312,7 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 }
 
 func recordExpired(recordExpiration int64) bool {
-	if recordExpiration == 0 {
+	if recordExpiration == -1 {
 		return false
 	}
 	return recordExpiration < time.Now().UnixMilli()
@@ -325,13 +325,21 @@ func handleSet(arr []interface{}, conn net.Conn, store *Store) {
 	if len(arr) == 5 {
 		switch arr[3].(string) {
 		case "EX", "ex":
-			duration, err := strconv.ParseInt(arr[4].(string), 10, 32)
+			durationSeconds, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
 				msg, _, _ := serializeSimpleError("ERR 'EX' arguments has to be integer")
 				conn.Write(([]byte(msg)))
 				return
 			}
-			expiryTimestamp = time.Now().UnixMilli() + duration*1000
+			expiryTimestamp = time.Now().UnixMilli() + durationSeconds*1000
+		case "PX", "px":
+			durationMilli, err := strconv.ParseInt(arr[4].(string), 10, 64)
+			if err != nil {
+				msg, _, _ := serializeSimpleError("ERR 'EX' arguments has to be integer")
+				conn.Write(([]byte(msg)))
+				return
+			}
+			expiryTimestamp = time.Now().UnixMilli() + durationMilli
 		default:
 			msg, _, _ := serializeSimpleError("ERR unknown option for SET")
 			conn.Write(([]byte(msg)))
