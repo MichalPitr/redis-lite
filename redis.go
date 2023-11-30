@@ -92,7 +92,7 @@ func deserializeInteger(message string) (int, int, error) {
 	return int(num), i + 2, nil
 }
 
-func serializeInteger(num int) (string, int, error) {
+func serializeInteger(num int64) (string, int, error) {
 	message := fmt.Sprintf(":%d\r\n", num)
 	return message, len(message) - 2, nil
 }
@@ -232,7 +232,6 @@ func handleRequest(conn net.Conn, store *Store) {
 
 		// deserialize command
 		input, _, err := deserializeNullOrArray(string(buf[:n]))
-		fmt.Println("input: ", input)
 		if err != nil {
 			msg, _, _ := serializeSimpleError("ERR - failed while deserializing input.")
 			conn.Write([]byte(msg))
@@ -276,8 +275,50 @@ func handleRequest(conn net.Conn, store *Store) {
 							count++
 						}
 					}
-					msg, _, _ := serializeInteger(count)
+					msg, _, _ := serializeInteger(int64(count))
 					conn.Write([]byte(msg))
+				case "DEL", "del":
+					if len(arr) < 2 {
+						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'del' command")
+						conn.Write([]byte(msg))
+						continue
+					}
+					count := 0
+					(*store).mu.Lock()
+					for _, key := range arr[1:] {
+						if _, ok := (*store).dict[key.(string)]; ok {
+							count++
+							delete((*store).dict, key.(string))
+						}
+					}
+					(*store).mu.Unlock()
+					msg, _, _ := serializeInteger(int64(count))
+					conn.Write([]byte(msg))
+				case "INCR", "incr":
+					if len(arr) != 2 {
+						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'INCR' command")
+						conn.Write([]byte(msg))
+						continue
+					}
+					(*store).mu.Lock()
+					val, ok := (*store).dict[arr[1].(string)]
+
+					// Key does not exist, so create it first
+					if ok != true {
+						val = Record{"0", -1}
+						(*store).dict[arr[1].(string)] = val
+					}
+					num, err := strconv.ParseInt(val.value, 10, 64)
+					if err != nil {
+						msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
+						conn.Write([]byte(msg))
+						continue
+					}
+					(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num + 1), val.expiryTimestamp}
+					(*store).mu.Unlock()
+					msg, _, _ := serializeInteger(num + 1)
+					conn.Write([]byte(msg))
+					continue
 				default:
 					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
 					conn.Write(([]byte(msg)))

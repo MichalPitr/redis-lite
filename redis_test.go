@@ -169,7 +169,7 @@ func TestDeserializeInteger(t *testing.T) {
 func TestSerializeInteger(t *testing.T) {
 	var tests = []struct {
 		name  string
-		input int
+		input int64
 		want  string
 	}{
 		// the table itself
@@ -541,5 +541,89 @@ func TestExists(t *testing.T) {
 	}
 	if res != 2 {
 		t.Errorf("Expected 2 keys but got '%d'", res)
+	}
+}
+
+func TestDel(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "key", "value", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	res, err := rdb.Del(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if res != 1 {
+		t.Errorf("Expected 1 but got '%d'", res)
+	}
+}
+
+func TestIncr(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "key", "1", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	res, err := rdb.Incr(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if res != 2 {
+		t.Errorf("Expected 2 but got '%d'", res)
+	}
+}
+
+func TestIncrKeyDoesNotExist(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	// Using new key, since we are sharing the store among multiple tests, so key might exist.
+	res, err := rdb.Incr(ctx, "thisKeyDoesNotExist").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if res != 1 {
+		t.Errorf("Expected 1 but got '%d'", res)
+	}
+}
+
+func TestIncrNonNumeric(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "nonnumeric", "someString", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	_, err = rdb.Incr(ctx, "nonnumeric").Result()
+	if err == nil {
+		t.Error("Expected an error")
+	}
+	if err.Error() != "ERR value is not an integer or out of range" {
+		t.Errorf("Expected 'must be integer' but got '%s'", err.Error())
 	}
 }
