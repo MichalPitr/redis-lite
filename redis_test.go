@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -313,6 +314,32 @@ func TestSetGet(t *testing.T) {
 	if val != "value" {
 		t.Errorf("Got '%s' but expected '%s'", val, "value")
 	}
+}
+
+func TestSetGetEx(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+	// Set expriration of 2 seconds
+	err := rdb.Set(ctx, "key", "value", 2*time.Second).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Confirm that value was set
+	val, err := rdb.Get(ctx, "key").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if val != "value" {
+		t.Errorf("Got '%s' but expected '%s'", val, "value")
+	}
+
+	// Wait for 2 seconds to confirm that value was reset.
+	time.Sleep(2 * time.Second)
 }
 
 func TestGetNonExistant(t *testing.T) {

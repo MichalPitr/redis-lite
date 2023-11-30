@@ -6,16 +6,22 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
+
+type Record struct {
+	value           string
+	expiryTimestamp int64
+}
 
 type Store struct {
 	mu   sync.Mutex
-	dict map[string]string
+	dict map[string]Record
 }
 
 func newStore() *Store {
 	store := &Store{
-		dict: map[string]string{},
+		dict: map[string]Record{},
 	}
 	return store
 }
@@ -260,38 +266,11 @@ func handleRequest(conn net.Conn, store *Store) {
 					msg, _, _ := serializeBulkString(arr[1].(string))
 					conn.Write(([]byte(msg)))
 				case "SET", "set":
-					if len(arr) != 3 {
-						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
-						conn.Write(([]byte(msg)))
-						continue
-					}
 					// Handle access to shared store used by other go-routines.
-					(*store).mu.Lock()
-					(*store).dict[arr[1].(string)] = arr[2].(string)
-					(*store).mu.Unlock()
-
-					msg, _, _ := serializeSimpleString("OK")
-					conn.Write(([]byte(msg)))
+					handleSet(arr, conn, store)
 				case "GET", "get":
-					if len(arr) != 2 {
-						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
-						conn.Write(([]byte(msg)))
-						continue
-					}
-
 					// Handle access to shared store used by other go-routines.
-					(*store).mu.Lock()
-					val, ok := (*store).dict[arr[1].(string)]
-					(*store).mu.Unlock()
-
-					if ok == false {
-						msg, _, _ := serializeNullArray()
-						conn.Write(([]byte(msg)))
-						continue
-					}
-					msg, _, _ := serializeBulkString(val)
-					conn.Write(([]byte(msg)))
-					continue
+					handleGet(arr, conn, store)
 				default:
 					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
 					conn.Write(([]byte(msg)))
@@ -300,6 +279,76 @@ func handleRequest(conn net.Conn, store *Store) {
 			}
 		}
 	}
+}
+
+func handleGet(arr []interface{}, conn net.Conn, store *Store) {
+	if len(arr) != 2 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
+		conn.Write(([]byte(msg)))
+		return
+	}
+
+	(*store).mu.Lock()
+	record, ok := (*store).dict[arr[1].(string)]
+	(*store).mu.Unlock()
+
+	if ok == false {
+		msg, _, _ := serializeNullArray()
+		conn.Write(([]byte(msg)))
+		return
+	}
+
+	// delete expired key and return nil, since the key doesn't exist anymore.
+	if recordExpired(record.expiryTimestamp) {
+		delete(*&store.dict, arr[1].(string))
+		msg, _, _ := serializeNullArray()
+		conn.Write(([]byte(msg)))
+		return
+	}
+
+	msg, _, _ := serializeBulkString(record.value)
+	conn.Write(([]byte(msg)))
+	return
+}
+
+func recordExpired(recordExpiration int64) bool {
+	if recordExpiration == 0 {
+		return false
+	}
+	return recordExpiration < time.Now().UnixMilli()
+}
+
+func handleSet(arr []interface{}, conn net.Conn, store *Store) {
+	// -1 denotes no expiration is set.
+	var expiryTimestamp int64 = -1
+
+	if len(arr) == 5 {
+		switch arr[3].(string) {
+		case "EX", "ex":
+			duration, err := strconv.ParseInt(arr[4].(string), 10, 32)
+			if err != nil {
+				msg, _, _ := serializeSimpleError("ERR 'EX' arguments has to be integer")
+				conn.Write(([]byte(msg)))
+				return
+			}
+			expiryTimestamp = time.Now().UnixMilli() + duration*1000
+		default:
+			msg, _, _ := serializeSimpleError("ERR unknown option for SET")
+			conn.Write(([]byte(msg)))
+			return
+		}
+	} else if len(arr) != 3 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
+		conn.Write(([]byte(msg)))
+		return
+	}
+
+	(*store).mu.Lock()
+	(*store).dict[arr[1].(string)] = Record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
+	(*store).mu.Unlock()
+
+	msg, _, _ := serializeSimpleString("OK")
+	conn.Write(([]byte(msg)))
 }
 
 func main() {
