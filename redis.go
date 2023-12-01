@@ -296,30 +296,9 @@ func handleRequest(conn net.Conn, store *Store) {
 					msg, _, _ := serializeInteger(int64(count))
 					conn.Write([]byte(msg))
 				case "INCR", "incr":
-					if len(arr) != 2 {
-						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'INCR' command")
-						conn.Write([]byte(msg))
-						continue
-					}
-					(*store).mu.Lock()
-					val, ok := (*store).dict[arr[1].(string)]
-
-					// Key does not exist, so create it first
-					if ok != true {
-						val = Record{"0", -1}
-						(*store).dict[arr[1].(string)] = val
-					}
-					num, err := strconv.ParseInt(val.value, 10, 64)
-					if err != nil || num >= math.MaxInt64 {
-						msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
-						conn.Write([]byte(msg))
-						continue
-					}
-					(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num + 1), val.expiryTimestamp}
-					(*store).mu.Unlock()
-					msg, _, _ := serializeInteger(num + 1)
-					conn.Write([]byte(msg))
-					continue
+					handleIncr(arr, conn, store)
+				case "DECR", "decr":
+					handleDecr(arr, conn, store)
 				default:
 					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
 					conn.Write(([]byte(msg)))
@@ -330,18 +309,76 @@ func handleRequest(conn net.Conn, store *Store) {
 	}
 }
 
+func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
+	if len(arr) != 2 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'decr' command")
+		conn.Write([]byte(msg))
+		return
+	}
+	(*store).mu.Lock()
+	defer (*store).mu.Unlock()
+	val, ok := (*store).dict[arr[1].(string)]
+
+	if ok != true {
+		val = Record{"0", -1}
+		(*store).dict[arr[1].(string)] = val
+	}
+	num, err := strconv.ParseInt(val.value, 10, 64)
+	if err != nil || num <= math.MinInt64 {
+		msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
+		conn.Write([]byte(msg))
+		return
+	}
+	num--
+	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), val.expiryTimestamp}
+	(*store).mu.Unlock()
+	msg, _, _ := serializeInteger(num)
+	conn.Write([]byte(msg))
+	return
+}
+
+func handleIncr(arr []interface{}, conn net.Conn, store *Store) {
+	if len(arr) != 2 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'INCR' command")
+		conn.Write([]byte(msg))
+		return
+	}
+	(*store).mu.Lock()
+	defer (*store).mu.Unlock()
+	val, ok := (*store).dict[arr[1].(string)]
+
+	if ok != true {
+		val = Record{"0", -1}
+		(*store).dict[arr[1].(string)] = val
+	}
+	num, err := strconv.ParseInt(val.value, 10, 64)
+	if err != nil || num >= math.MaxInt64 {
+		msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
+		conn.Write([]byte(msg))
+		return
+	}
+	num++
+	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), val.expiryTimestamp}
+	msg, _, _ := serializeInteger(num)
+	conn.Write([]byte(msg))
+	return
+}
+
 func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 	if len(arr) != 2 {
 		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
 		conn.Write(([]byte(msg)))
 		return
 	}
+	fmt.Println("In handleGet")
 
 	(*store).mu.Lock()
+	defer (*store).mu.Unlock()
 	record, ok := (*store).dict[arr[1].(string)]
-	(*store).mu.Unlock()
 
 	if ok == false {
+		fmt.Println("Returning nil")
+
 		msg, _, _ := serializeNullArray()
 		conn.Write(([]byte(msg)))
 		return
@@ -349,12 +386,15 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 
 	// delete expired key and return nil, since the key doesn't exist anymore.
 	if recordExpired(record.expiryTimestamp) {
+		fmt.Println("expired record")
 		delete(*&store.dict, arr[1].(string))
+
 		msg, _, _ := serializeNullArray()
 		conn.Write(([]byte(msg)))
 		return
 	}
 
+	fmt.Println("exiting")
 	msg, _, _ := serializeBulkString(record.value)
 	conn.Write(([]byte(msg)))
 	return

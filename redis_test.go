@@ -344,6 +344,9 @@ func TestSetGetEx(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	// Confirm that value was set
 	val, err = rdb.Get(ctx, "key").Result()
+	if err == nil {
+		t.Error("Expected error to signal key expired.")
+	}
 	if err.Error() != "redis: nil" {
 		t.Error("Expected nil but got ")
 	}
@@ -376,6 +379,9 @@ func TestSetGetPx(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	// Confirm that value was set
 	val, err = rdb.Get(ctx, "key").Result()
+	if err == nil {
+		t.Error("Expected error to signal key expired.")
+	}
 	if err.Error() != "redis: nil" {
 		t.Error("Expected nil")
 	}
@@ -410,7 +416,10 @@ func TestSetGetExat(t *testing.T) {
 	// Confirm that value was reset
 	time.Sleep(2 * time.Second)
 	val, err = rdb.Get(ctx, "key").Result()
-	if err == nil || err.Error() != "redis: nil" {
+	if err == nil {
+		t.Error("Expected error to signal key expired.")
+	}
+	if err.Error() != "redis: nil" {
 		t.Error("Expected nil")
 	}
 }
@@ -444,6 +453,9 @@ func TestSetGetPxat(t *testing.T) {
 	// Confirm that value was reset
 	time.Sleep(500 * time.Millisecond)
 	val, err = rdb.Get(ctx, "key").Result()
+	if err == nil {
+		t.Error("Expected error to signal key expired.")
+	}
 	if err == nil || err.Error() != "redis: nil" {
 		t.Errorf("Expected nil but got '%s'", err)
 	}
@@ -648,5 +660,88 @@ func TestIncrNonNumeric(t *testing.T) {
 	}
 	if err.Error() != "ERR value is not an integer or out of range" {
 		t.Errorf("Expected 'must be integer' but got '%s'", err.Error())
+	}
+}
+
+func TestDecrKeyDoesNotExist(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	// Using new key, since we are sharing the store among multiple tests, so key might exist.
+	res, err := rdb.Decr(ctx, "thisKeyDecrDoesNotExist").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if res != -1 {
+		t.Errorf("Expected -1 but got '%d'", res)
+	}
+}
+
+func TestDecrNonNumeric(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "nonnumericdecr", "someString", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	_, err = rdb.Decr(ctx, "nonnumericdecr").Result()
+	if err == nil {
+		t.Error("Expected an error")
+	}
+	if err.Error() != "ERR value is not an integer or out of range" {
+		t.Errorf("Expected 'must be integer' but got '%s'", err.Error())
+	}
+}
+
+func TestDecrOutOfRange(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	// Start with maximum value that is allowed.
+	err := rdb.Set(ctx, "keyTestDecrOutOfRange", fmt.Sprint(math.MinInt64), 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Increment would udnerflow - we want to prevent that
+	_, err = rdb.Decr(ctx, "keyTestDecrOutOfRange").Result()
+	if err == nil {
+		t.Error("Expected an error bur didn't get any")
+	}
+}
+
+func TestDecr(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "keyDecr", "1", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	res, err := rdb.Decr(ctx, "keyDecr").Result()
+	if err != nil {
+		t.Error(err)
+	}
+	if res != 0 {
+		t.Errorf("Expected 0 but got '%d'", res)
 	}
 }
