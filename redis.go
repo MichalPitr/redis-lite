@@ -10,8 +10,14 @@ import (
 	"time"
 )
 
+type LinkedList struct {
+	value string
+	next  *LinkedList
+	prev  *LinkedList
+}
+
 type Record struct {
-	value           string
+	value           interface{} // string or LinkedList
 	expiryTimestamp int64
 }
 
@@ -317,20 +323,27 @@ func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
 	}
 	(*store).mu.Lock()
 	defer (*store).mu.Unlock()
-	val, ok := (*store).dict[arr[1].(string)]
+	rec, ok := (*store).dict[arr[1].(string)]
 
-	if ok != true {
-		val = Record{"0", -1}
-		(*store).dict[arr[1].(string)] = val
+	if ok == false {
+		rec = Record{"0", -1}
+		(*store).dict[arr[1].(string)] = rec
 	}
-	num, err := strconv.ParseInt(val.value, 10, 64)
+	val, ok := rec.value.(string)
+	if ok == false {
+		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		conn.Write([]byte(msg))
+		return
+	}
+
+	num, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || num <= math.MinInt64 {
 		msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
 		conn.Write([]byte(msg))
 		return
 	}
 	num--
-	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), val.expiryTimestamp}
+	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), rec.expiryTimestamp}
 	(*store).mu.Unlock()
 	msg, _, _ := serializeInteger(num)
 	conn.Write([]byte(msg))
@@ -345,20 +358,27 @@ func handleIncr(arr []interface{}, conn net.Conn, store *Store) {
 	}
 	(*store).mu.Lock()
 	defer (*store).mu.Unlock()
-	val, ok := (*store).dict[arr[1].(string)]
 
-	if ok != true {
-		val = Record{"0", -1}
-		(*store).dict[arr[1].(string)] = val
+	rec, ok := (*store).dict[arr[1].(string)]
+	if ok == false {
+		rec = Record{"0", -1}
+		(*store).dict[arr[1].(string)] = rec
 	}
-	num, err := strconv.ParseInt(val.value, 10, 64)
+	val, ok := rec.value.(string)
+	if ok == false {
+		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		conn.Write([]byte(msg))
+		return
+	}
+
+	num, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || num >= math.MaxInt64 {
 		msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
 		conn.Write([]byte(msg))
 		return
 	}
 	num++
-	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), val.expiryTimestamp}
+	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), rec.expiryTimestamp}
 	msg, _, _ := serializeInteger(num)
 	conn.Write([]byte(msg))
 	return
@@ -374,7 +394,7 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 
 	(*store).mu.Lock()
 	defer (*store).mu.Unlock()
-	record, ok := (*store).dict[arr[1].(string)]
+	rec, ok := (*store).dict[arr[1].(string)]
 
 	if ok == false {
 		fmt.Println("Returning nil")
@@ -384,8 +404,15 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 		return
 	}
 
+	val, ok := rec.value.(string)
+	if ok == false {
+		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		conn.Write([]byte(msg))
+		return
+	}
+
 	// delete expired key and return nil, since the key doesn't exist anymore.
-	if recordExpired(record.expiryTimestamp) {
+	if recordExpired(rec.expiryTimestamp) {
 		fmt.Println("expired record")
 		delete(*&store.dict, arr[1].(string))
 
@@ -395,7 +422,7 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 	}
 
 	fmt.Println("exiting")
-	msg, _, _ := serializeBulkString(record.value)
+	msg, _, _ := serializeBulkString(val)
 	conn.Write(([]byte(msg)))
 	return
 }
@@ -465,6 +492,8 @@ func handleSet(arr []interface{}, conn net.Conn, store *Store) {
 				return
 			}
 			expiryTimestamp = unixMilli
+		case "RPUSH", "rpush":
+
 		default:
 			msg, _, _ := serializeSimpleError("ERR unknown option for SET")
 			conn.Write(([]byte(msg)))
