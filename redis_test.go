@@ -859,3 +859,28 @@ func TestLPushLPopNonExist(t *testing.T) {
 		t.Errorf("Expected 'redis: nil' but got '%s'", err.Error())
 	}
 }
+
+func TestLPushLPopCount(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	count, err := rdb.LPush(ctx, "arrKey2", "first", "second", "third").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Errorf("Expected '3' but got '%d'", count)
+	}
+
+	resArr, err := rdb.LPopCount(ctx, "arrKey2", 3).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resArr[0] != "third" || resArr[1] != "second" || resArr[2] != "first" {
+		t.Error("Result array does not match or does not have the correct order")
+	}
+}

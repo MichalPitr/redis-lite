@@ -219,6 +219,14 @@ func deserializeArray(message string) ([]interface{}, int, error) {
 	return arr, i - start, nil
 }
 
+func serializeStringArray(arr []string) (string, int, error) {
+	res := fmt.Sprintf("*%d\r\n", len(arr))
+	for _, item := range arr {
+		res += fmt.Sprintf("$%d\r\n%s\r\n", len(item), item)
+	}
+	return res, len(res), nil
+}
+
 func deserializePrimitive(message string) (interface{}, int, error) {
 	switch message[0] {
 	case '+':
@@ -404,23 +412,45 @@ func handleLPop(arr []interface{}, conn net.Conn, store *Store) {
 		return
 	}
 
-	val := ll.head.value
-	ll.head = ll.head.next
-	if ll.head != nil {
-		ll.head.prev = nil
+	count := 1
+	if len(arr) == 3 {
+		parsedCount, err := strconv.ParseInt(arr[2].(string), 10, 64)
+		if err != nil {
+			msg, _, _ := serializeSimpleError("ERR internal error")
+			conn.Write([]byte(msg))
+			return
+		}
+		count = int(parsedCount)
 	}
-	ll.length--
 
-	// If there's only one node, it's both the head and tail
-	if ll.length == 1 {
-		ll.tail = ll.head
+	resultArr := make([]string, count)
+	for i := 0; i < int(count); i++ {
+		val := ll.head.value
+		ll.head = ll.head.next
+		if ll.head != nil {
+			ll.head.prev = nil
+		}
+		ll.length--
+
+		// If there's only one node, it's both the head and tail
+		if ll.length == 1 {
+			ll.tail = ll.head
+		}
+
+		// Write back ll to map
+		rec.value = ll
+		(*store).dict[arr[1].(string)] = rec
+
+		resultArr[i] = val
 	}
 
-	// Write back ll to map
-	rec.value = ll
-	(*store).dict[arr[1].(string)] = rec
+	if len(resultArr) == 1 {
+		msg, _, _ := serializeBulkString(resultArr[0])
+		conn.Write([]byte(msg))
+		return
+	}
 
-	msg, _, _ := serializeSimpleString(val)
+	msg, _, _ := serializeStringArray(resultArr)
 	conn.Write([]byte(msg))
 	return
 }
