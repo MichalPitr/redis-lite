@@ -1,1 +1,3 @@
 redis-lite
+*.log
+todo.txt

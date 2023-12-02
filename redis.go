@@ -2,246 +2,17 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"net"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 )
 
-type Node struct {
-	value string
-	next  *Node
-	prev  *Node
-}
+const port = 6379
 
-type LinkedList struct {
-	length uint
-	head   *Node
-	tail   *Node
-}
-
-type Record struct {
-	value           interface{} // string or LinkedList
-	expiryTimestamp int64
-}
-
-type Store struct {
-	mu   sync.Mutex
-	dict map[string]Record
-}
-
-func newStore() *Store {
-	store := &Store{
-		dict: map[string]Record{},
-	}
-	return store
-}
-
-// +OK\r\n
-func deserializeSimpleString(message string) (string, int, error) {
-	if message[0] != '+' {
-		return "", 0, fmt.Errorf("Expected a simple string startin with '+' but got '%c'", message[0])
-	}
-
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
-		i++
-	}
-
-	return message[start:i], i + 2, nil
-}
-
-func serializeSimpleString(message string) (string, int, error) {
-	for _, c := range message {
-		if c == '\n' || c == '\r' {
-			return "", 0, fmt.Errorf("CLRF characters are not allowed in simple strings.")
-		}
-	}
-	return fmt.Sprintf("+%s\r\n", message), len(message), nil
-}
-
-func deserializeSimpleError(message string) (string, int, error) {
-	if message[0] != '-' {
-		return "", 0, fmt.Errorf("Expected a simple error startin with '-' but got '%c'", message[0])
-	}
-
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
-		i++
-	}
-
-	return message[start:i], i + 2, nil
-}
-
-func serializeSimpleError(message string) (string, int, error) {
-	for _, c := range message {
-		if c == '\n' || c == '\r' {
-			return "", 0, fmt.Errorf("CLRF characters are not allowed in simple errors.")
-		}
-	}
-	return fmt.Sprintf("-%s\r\n", message), len(message), nil
-}
-
-func deserializeInteger(message string) (int, int, error) {
-	if message[0] != ':' {
-		return 0, 0, fmt.Errorf("Expected a integer to begin with ':' but got '%c'", message[0])
-	}
-
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
-		i++
-	}
-
-	num, err := strconv.ParseInt(message[start:i], 10, 32)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return int(num), i + 2, nil
-}
-
-func serializeInteger(num int64) (string, int, error) {
-	message := fmt.Sprintf(":%d\r\n", num)
-	return message, len(message) - 2, nil
-}
-
-func deserializeNullOrBulkString(message string) (interface{}, int, error) {
-	if message[0] != '$' {
-		return "", 0, fmt.Errorf("Expected bulk string to begin with '$' but got '%c'", message[0])
-	}
-
-	isNull, err := isNullBulkString(message)
-	if err != nil {
-		return "", 0, err
-	}
-	if isNull == true {
-		return nil, 5, nil
-	}
-
-	return deserializeBulkString(message)
-}
-
-func deserializeBulkString(message string) (string, int, error) {
-	// decode string length
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
-		i++
-	}
-	length, err := strconv.ParseInt(message[start:i], 10, 32)
-	if err != nil {
-		return "", 0, fmt.Errorf("Failed to decode bulk string length: %v", err)
-	}
-
-	// Skip over CLRF after string length
-	i += 2
-	return message[i : i+int(length)], i + int(length) + 2, nil
-}
-
-func serializeBulkString(message string) (string, int, error) {
-	return fmt.Sprintf("$%d\r\n%s\r\n", len(message), message), len(message), nil
-}
-
-func isNullBulkString(message string) (bool, error) {
-	if message[0] != '$' {
-		return false, fmt.Errorf("Expected bulk string to begin with '$' but got '%c'", message[0])
-	}
-
-	if message[1] == '-' && message[2] == '1' {
-		return true, nil
-	}
-
-	if message[1] == '-' {
-		return false, fmt.Errorf("Only negative 1 is allowed in bulk strings to indicate null string.")
-	}
-	return false, nil
-}
-
-func deserializeNullOrArray(message string) (interface{}, int, error) {
-	if message[0] != '*' {
-		return "", 0, fmt.Errorf("Expected array to begin with '*' but got '%c'", message[0])
-	}
-
-	if message[1] == '-' && message[2] == '1' {
-		if message[3] != '\r' || message[4] != '\n' {
-			return "", 0, fmt.Errorf("Null array not terminated with CRLF.")
-		}
-		return nil, 5, nil
-	}
-
-	return deserializeArray(message)
-}
-
-func serializeNullArray() (string, int, error) {
-	return "*-1\r\n", 5, nil
-}
-
-func serializeNullBulkString() (string, int, error) {
-	return "$-1\r\n", 5, nil
-}
-
-func deserializeArray(message string) ([]interface{}, int, error) {
-	if message[0] != '*' {
-		return []interface{}{}, 0, fmt.Errorf("Expected array to begin with '*' but got '%c'", message[0])
-	}
-
-	// determine array length
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
-		i++
-	}
-	length, err := strconv.ParseInt(message[start:i], 10, 32)
-	if err != nil {
-		return []interface{}{}, 0, fmt.Errorf("Failed to decode bulk string length: %v", err)
-	}
-	if length < 0 {
-		return []interface{}{}, 0, fmt.Errorf("Array langth can't be negative %v", err)
-	}
-
-	// step over CRLF
-	i += 2
-
-	arr := make([]interface{}, length)
-	for idx := 0; idx < int(length); idx++ {
-		val, s, err := deserializePrimitive(message[i:])
-		if err != nil {
-			return nil, 0, err
-		}
-		i += s
-		arr[idx] = val
-	}
-	return arr, i - start, nil
-}
-
-func serializeStringArray(arr []string) (string, int, error) {
-	res := fmt.Sprintf("*%d\r\n", len(arr))
-	for _, item := range arr {
-		res += fmt.Sprintf("$%d\r\n%s\r\n", len(item), item)
-	}
-	return res, len(res), nil
-}
-
-func deserializePrimitive(message string) (interface{}, int, error) {
-	switch message[0] {
-	case '+':
-		return deserializeSimpleString(message)
-	case '-':
-		return deserializeSimpleError(message)
-	case ':':
-		return deserializeInteger(message)
-	case '$':
-		return deserializeNullOrBulkString(message)
-	}
-	return nil, 0, fmt.Errorf("Expected a primitive to deserialize, but received unsupported type: '%c'", message[0])
-}
-
-func handleRequest(conn net.Conn, store *Store) {
+func handleRequest(conn net.Conn, store *dictionary) {
 	defer conn.Close()
 
 	for {
@@ -259,62 +30,22 @@ func handleRequest(conn net.Conn, store *Store) {
 		}
 
 		if input == nil {
-			fmt.Println("Received nil array.")
+			log.Println("Received nil array.")
 		} else {
 			if arr, ok := input.([]interface{}); ok {
 				switch arr[0] {
 				case "PING", "ping":
-					if len(arr) == 1 {
-						msg, _, _ := serializeBulkString("PONG")
-						conn.Write([]byte(msg))
-					}
-					if len(arr) == 2 {
-						msg, _, _ := serializeBulkString(arr[1].(string))
-						conn.Write([]byte(msg))
-					} else {
-						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'ping' command")
-						conn.Write([]byte(msg))
-					}
+					handlePing(arr, conn)
 				case "ECHO", "echo":
-					msg, _, _ := serializeBulkString(arr[1].(string))
-					conn.Write(([]byte(msg)))
+					handleEcho(arr, conn)
 				case "SET", "set":
-					// Handle access to shared store used by other go-routines.
 					handleSet(arr, conn, store)
 				case "GET", "get":
-					// Handle access to shared store used by other go-routines.
 					handleGet(arr, conn, store)
 				case "EXISTS", "exists":
-					if len(arr) < 2 {
-						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'exists' command")
-						conn.Write([]byte(msg))
-						continue
-					}
-					count := 0
-					for _, key := range arr[1:] {
-						if _, ok := (*store).dict[key.(string)]; ok {
-							count++
-						}
-					}
-					msg, _, _ := serializeInteger(int64(count))
-					conn.Write([]byte(msg))
+					handleExists(arr, conn, store)
 				case "DEL", "del":
-					if len(arr) < 2 {
-						msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'del' command")
-						conn.Write([]byte(msg))
-						continue
-					}
-					count := 0
-					(*store).mu.Lock()
-					for _, key := range arr[1:] {
-						if _, ok := (*store).dict[key.(string)]; ok {
-							count++
-							delete((*store).dict, key.(string))
-						}
-					}
-					(*store).mu.Unlock()
-					msg, _, _ := serializeInteger(int64(count))
-					conn.Write([]byte(msg))
+					handleDel(arr, conn, store)
 				case "INCR", "incr":
 					handleIncr(arr, conn, store)
 				case "DECR", "decr":
@@ -333,7 +64,61 @@ func handleRequest(conn net.Conn, store *Store) {
 	}
 }
 
-func handleLPush(arr []interface{}, conn net.Conn, store *Store) {
+func handleEcho(arr []interface{}, conn net.Conn) {
+	msg, _, _ := serializeBulkString(arr[1].(string))
+	conn.Write(([]byte(msg)))
+}
+
+func handleDel(arr []interface{}, conn net.Conn, store *dictionary) {
+	if len(arr) < 2 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'del' command")
+		conn.Write([]byte(msg))
+		return
+	}
+	count := 0
+	(*store).mu.Lock()
+	for _, key := range arr[1:] {
+		if _, ok := (*store).dict[key.(string)]; ok {
+			count++
+			delete((*store).dict, key.(string))
+		}
+	}
+	(*store).mu.Unlock()
+	msg, _, _ := serializeInteger(int64(count))
+	conn.Write([]byte(msg))
+}
+
+func handleExists(arr []interface{}, conn net.Conn, store *dictionary) {
+	if len(arr) < 2 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'exists' command")
+		conn.Write([]byte(msg))
+		return
+	}
+	count := 0
+	for _, key := range arr[1:] {
+		if _, ok := (*store).dict[key.(string)]; ok {
+			count++
+		}
+	}
+	msg, _, _ := serializeInteger(int64(count))
+	conn.Write([]byte(msg))
+}
+
+func handlePing(arr []interface{}, conn net.Conn) {
+	if len(arr) == 1 {
+		msg, _, _ := serializeBulkString("PONG")
+		conn.Write([]byte(msg))
+	}
+	if len(arr) == 2 {
+		msg, _, _ := serializeBulkString(arr[1].(string))
+		conn.Write([]byte(msg))
+	} else {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'ping' command")
+		conn.Write([]byte(msg))
+	}
+}
+
+func handleLPush(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
 		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'lpush' command")
 		conn.Write([]byte(msg))
@@ -347,13 +132,13 @@ func handleLPush(arr []interface{}, conn net.Conn, store *Store) {
 	rec, ok := (*store).dict[arr[1].(string)]
 	if ok == false {
 		// initialize Linked List
-		rec = Record{value: LinkedList{
+		rec = record{value: linkedList{
 			length: 0},
 			expiryTimestamp: -1}
 		(*store).dict[arr[1].(string)] = rec
 	}
 
-	ll, ok := rec.value.(LinkedList)
+	ll, ok := rec.value.(linkedList)
 	if ok == false {
 		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		conn.Write([]byte(msg))
@@ -363,7 +148,7 @@ func handleLPush(arr []interface{}, conn net.Conn, store *Store) {
 	// Insert one by one at the front
 	// Inserting A, B, C results in LL of C -> B -> A
 	for _, val := range arr[2:] {
-		node := Node{value: val.(string), next: ll.head, prev: nil}
+		node := node{value: val.(string), next: ll.head, prev: nil}
 		if ll.head != nil {
 			ll.head.prev = &node
 		}
@@ -383,7 +168,7 @@ func handleLPush(arr []interface{}, conn net.Conn, store *Store) {
 	return
 }
 
-func handleLPop(arr []interface{}, conn net.Conn, store *Store) {
+func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 || len(arr) > 3 {
 		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'lpop' command")
 		conn.Write([]byte(msg))
@@ -400,7 +185,7 @@ func handleLPop(arr []interface{}, conn net.Conn, store *Store) {
 		return
 	}
 
-	ll, ok := rec.value.(LinkedList)
+	ll, ok := rec.value.(linkedList)
 	if ok == false {
 		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		conn.Write([]byte(msg))
@@ -455,7 +240,7 @@ func handleLPop(arr []interface{}, conn net.Conn, store *Store) {
 	return
 }
 
-func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
+func handleDecr(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
 		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'decr' command")
 		conn.Write([]byte(msg))
@@ -466,7 +251,7 @@ func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
 
 	rec, ok := (*store).dict[arr[1].(string)]
 	if ok == false {
-		rec = Record{"0", -1}
+		rec = record{"0", -1}
 		(*store).dict[arr[1].(string)] = rec
 	}
 	val, ok := rec.value.(string)
@@ -483,13 +268,13 @@ func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
 		return
 	}
 	num--
-	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), rec.expiryTimestamp}
+	(*store).dict[arr[1].(string)] = record{fmt.Sprint(num), rec.expiryTimestamp}
 	msg, _, _ := serializeInteger(num)
 	conn.Write([]byte(msg))
 	return
 }
 
-func handleIncr(arr []interface{}, conn net.Conn, store *Store) {
+func handleIncr(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
 		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'INCR' command")
 		conn.Write([]byte(msg))
@@ -500,7 +285,7 @@ func handleIncr(arr []interface{}, conn net.Conn, store *Store) {
 
 	rec, ok := (*store).dict[arr[1].(string)]
 	if ok == false {
-		rec = Record{"0", -1}
+		rec = record{"0", -1}
 		(*store).dict[arr[1].(string)] = rec
 	}
 	val, ok := rec.value.(string)
@@ -517,13 +302,13 @@ func handleIncr(arr []interface{}, conn net.Conn, store *Store) {
 		return
 	}
 	num++
-	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), rec.expiryTimestamp}
+	(*store).dict[arr[1].(string)] = record{fmt.Sprint(num), rec.expiryTimestamp}
 	msg, _, _ := serializeInteger(num)
 	conn.Write([]byte(msg))
 	return
 }
 
-func handleGet(arr []interface{}, conn net.Conn, store *Store) {
+func handleGet(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
 		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
 		conn.Write(([]byte(msg)))
@@ -568,7 +353,7 @@ func recordExpired(recordExpiration int64) bool {
 	return recordExpiration < time.Now().UnixMilli()
 }
 
-func handleSet(arr []interface{}, conn net.Conn, store *Store) {
+func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 	// -1 denotes no expiration is set.
 	var expiryTimestamp int64 = -1
 
@@ -638,16 +423,15 @@ func handleSet(arr []interface{}, conn net.Conn, store *Store) {
 	}
 
 	(*store).mu.Lock()
-	(*store).dict[arr[1].(string)] = Record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
+	(*store).dict[arr[1].(string)] = record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
 	(*store).mu.Unlock()
 
 	msg, _, _ := serializeSimpleString("OK")
 	conn.Write(([]byte(msg)))
 }
 
-// TODO: Maybe have to use mutex, but then we block the store for quite a long time.
-func activeKeyExpirer(store *Store) {
-	// get keys
+// Locks the store while cleaning up - Not sure about the perf impact.
+func activeKeyExpirer(store *dictionary) {
 	for {
 		expired := 0
 		total := 0
@@ -681,26 +465,28 @@ func activeKeyExpirer(store *Store) {
 }
 
 func main() {
-	listener, err := net.Listen("tcp", "0.0.0.0:6379")
+	// Sets the log file
+	file, err := os.OpenFile("redis.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	log.SetOutput(file)
+
+	address := fmt.Sprintf("0.0.0.0:%d", port)
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		os.Exit(1)
+		log.Fatal("Error listening:", err.Error())
 	}
-	// Close the listener when the application closes
 	defer listener.Close()
-	fmt.Println("Listening on 0.0.0.0:6379")
+
+	log.Printf("Listening on %s...", address)
 
 	store := newStore()
 
-	// start active key expirer
 	go activeKeyExpirer(store)
 
 	for {
-		// Accept a connection\\
+		// Accept a connection
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting: ", err.Error())
-			os.Exit(1)
+			log.Fatal("Error accepting: ", err.Error())
 		}
 		go handleRequest(conn, store)
 	}
