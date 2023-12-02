@@ -10,10 +10,16 @@ import (
 	"time"
 )
 
-type LinkedList struct {
+type Node struct {
 	value string
-	next  *LinkedList
-	prev  *LinkedList
+	next  *Node
+	prev  *Node
+}
+
+type LinkedList struct {
+	length uint
+	head   *Node
+	tail   *Node
 }
 
 type Record struct {
@@ -305,6 +311,10 @@ func handleRequest(conn net.Conn, store *Store) {
 					handleIncr(arr, conn, store)
 				case "DECR", "decr":
 					handleDecr(arr, conn, store)
+				case "LPUSH", "lpush":
+					handleLPush(arr, conn, store)
+				case "LPOP", "lpop":
+					handleLPop(arr, conn, store)
 				default:
 					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
 					conn.Write(([]byte(msg)))
@@ -315,6 +325,106 @@ func handleRequest(conn net.Conn, store *Store) {
 	}
 }
 
+func handleLPush(arr []interface{}, conn net.Conn, store *Store) {
+	if len(arr) < 2 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'lpush' command")
+		conn.Write([]byte(msg))
+		return
+	}
+
+	(*store).mu.Lock()
+	defer (*store).mu.Unlock()
+
+	// Add logic to initialize LL if it doesn't exist
+	rec, ok := (*store).dict[arr[1].(string)]
+	if ok == false {
+		// initialize Linked List
+		rec = Record{value: LinkedList{
+			length: 0},
+			expiryTimestamp: -1}
+		(*store).dict[arr[1].(string)] = rec
+	}
+
+	ll, ok := rec.value.(LinkedList)
+	if ok == false {
+		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		conn.Write([]byte(msg))
+		return
+	}
+
+	// Insert one by one at the front
+	// Inserting A, B, C results in LL of C -> B -> A
+	for _, val := range arr[2:] {
+		node := Node{value: val.(string), next: ll.head, prev: nil}
+		if ll.head != nil {
+			ll.head.prev = &node
+		}
+		ll.head = &node
+		ll.length++
+
+		// The only time LPUSH affects the tail is when 1st item is inserted.
+		if ll.length == 1 {
+			ll.tail = &node
+		}
+		rec.value = ll
+		(*store).dict[arr[1].(string)] = rec
+	}
+
+	msg, _, _ := serializeInteger(int64(ll.length))
+	conn.Write([]byte(msg))
+	return
+}
+
+func handleLPop(arr []interface{}, conn net.Conn, store *Store) {
+	if len(arr) < 2 || len(arr) > 3 {
+		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'lpop' command")
+		conn.Write([]byte(msg))
+		return
+	}
+
+	(*store).mu.Lock()
+	defer (*store).mu.Unlock()
+
+	rec, ok := (*store).dict[arr[1].(string)]
+	if ok == false {
+		msg, _, _ := serializeNullArray()
+		conn.Write([]byte(msg))
+		return
+	}
+
+	ll, ok := rec.value.(LinkedList)
+	if ok == false {
+		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		conn.Write([]byte(msg))
+		return
+	}
+	if ll.length == 0 {
+		msg, _, _ := serializeNullArray()
+		conn.Write([]byte(msg))
+		return
+	}
+
+	val := ll.head.value
+	ll.head = ll.head.next
+	if ll.head != nil {
+		ll.head.prev = nil
+	}
+	ll.length--
+
+	// If there's only one node, it's both the head and tail
+	if ll.length == 1 {
+		ll.tail = ll.head
+	}
+
+	// Write back ll to map
+	rec.value = ll
+	(*store).dict[arr[1].(string)] = rec
+
+	msg, _, _ := serializeSimpleString(val)
+	conn.Write([]byte(msg))
+	return
+}
+
 func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
 	if len(arr) != 2 {
 		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'decr' command")
@@ -323,8 +433,8 @@ func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
 	}
 	(*store).mu.Lock()
 	defer (*store).mu.Unlock()
-	rec, ok := (*store).dict[arr[1].(string)]
 
+	rec, ok := (*store).dict[arr[1].(string)]
 	if ok == false {
 		rec = Record{"0", -1}
 		(*store).dict[arr[1].(string)] = rec
@@ -344,7 +454,6 @@ func handleDecr(arr []interface{}, conn net.Conn, store *Store) {
 	}
 	num--
 	(*store).dict[arr[1].(string)] = Record{fmt.Sprint(num), rec.expiryTimestamp}
-	(*store).mu.Unlock()
 	msg, _, _ := serializeInteger(num)
 	conn.Write([]byte(msg))
 	return
@@ -390,15 +499,12 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 		conn.Write(([]byte(msg)))
 		return
 	}
-	fmt.Println("In handleGet")
 
 	(*store).mu.Lock()
 	defer (*store).mu.Unlock()
 	rec, ok := (*store).dict[arr[1].(string)]
 
 	if ok == false {
-		fmt.Println("Returning nil")
-
 		msg, _, _ := serializeNullArray()
 		conn.Write(([]byte(msg)))
 		return
@@ -413,7 +519,6 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 
 	// delete expired key and return nil, since the key doesn't exist anymore.
 	if recordExpired(rec.expiryTimestamp) {
-		fmt.Println("expired record")
 		delete(*&store.dict, arr[1].(string))
 
 		msg, _, _ := serializeNullArray()
@@ -421,7 +526,6 @@ func handleGet(arr []interface{}, conn net.Conn, store *Store) {
 		return
 	}
 
-	fmt.Println("exiting")
 	msg, _, _ := serializeBulkString(val)
 	conn.Write(([]byte(msg)))
 	return
@@ -492,8 +596,6 @@ func handleSet(arr []interface{}, conn net.Conn, store *Store) {
 				return
 			}
 			expiryTimestamp = unixMilli
-		case "RPUSH", "rpush":
-
 		default:
 			msg, _, _ := serializeSimpleError("ERR unknown option for SET")
 			conn.Write(([]byte(msg)))

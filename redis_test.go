@@ -340,12 +340,13 @@ func TestSetGetEx(t *testing.T) {
 		t.Errorf("Got '%s' but expected '%s'", val, "value")
 	}
 
-	// Wait for 2 seconds to confirm that value was reset.
-	time.Sleep(2 * time.Second)
+	// Wait for 3 seconds to confirm that value was reset.
+	time.Sleep(3 * time.Second)
 	// Confirm that value was set
 	val, err = rdb.Get(ctx, "key").Result()
 	if err == nil {
 		t.Error("Expected error to signal key expired.")
+		return
 	}
 	if err.Error() != "redis: nil" {
 		t.Error("Expected nil but got ")
@@ -375,12 +376,13 @@ func TestSetGetPx(t *testing.T) {
 		t.Errorf("Got '%s' but expected '%s'", val, "value")
 	}
 
-	// Wait for 500ms to confirm that value was reset.
-	time.Sleep(500 * time.Millisecond)
+	// Wait for 500ms + buffer to confirm that value was reset.
+	time.Sleep(700 * time.Millisecond)
 	// Confirm that value was set
 	val, err = rdb.Get(ctx, "key").Result()
 	if err == nil {
 		t.Error("Expected error to signal key expired.")
+		return
 	}
 	if err.Error() != "redis: nil" {
 		t.Error("Expected nil")
@@ -418,6 +420,7 @@ func TestSetGetExat(t *testing.T) {
 	val, err = rdb.Get(ctx, "key").Result()
 	if err == nil {
 		t.Error("Expected error to signal key expired.")
+		return
 	}
 	if err.Error() != "redis: nil" {
 		t.Error("Expected nil")
@@ -455,8 +458,9 @@ func TestSetGetPxat(t *testing.T) {
 	val, err = rdb.Get(ctx, "key").Result()
 	if err == nil {
 		t.Error("Expected error to signal key expired.")
+		return
 	}
-	if err == nil || err.Error() != "redis: nil" {
+	if err.Error() != "redis: nil" {
 		t.Errorf("Expected nil but got '%s'", err)
 	}
 }
@@ -657,6 +661,7 @@ func TestIncrNonNumeric(t *testing.T) {
 	_, err = rdb.Incr(ctx, "nonnumeric").Result()
 	if err == nil {
 		t.Error("Expected an error")
+		return
 	}
 	if err.Error() != "ERR value is not an integer or out of range" {
 		t.Errorf("Expected 'must be integer' but got '%s'", err.Error())
@@ -697,6 +702,7 @@ func TestDecrNonNumeric(t *testing.T) {
 	_, err = rdb.Decr(ctx, "nonnumericdecr").Result()
 	if err == nil {
 		t.Error("Expected an error")
+		return
 	}
 	if err.Error() != "ERR value is not an integer or out of range" {
 		t.Errorf("Expected 'must be integer' but got '%s'", err.Error())
@@ -743,5 +749,113 @@ func TestDecr(t *testing.T) {
 	}
 	if res != 0 {
 		t.Errorf("Expected 0 but got '%d'", res)
+	}
+}
+
+func TestLPush(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	count, err := rdb.LPush(ctx, "arrKey", "firstEntry").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("Expected '1' but got '%d'", count)
+	}
+}
+
+func TestLPushExistingKeyWrongType(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	err := rdb.Set(ctx, "NotALinkedList", "foo", 0).Err()
+	if err != nil {
+		t.Error(err)
+	}
+
+	_, err = rdb.LPush(ctx, "NotALinkedList", "firstEntry").Result()
+	if err == nil {
+		t.Fatal(err)
+	}
+	if err.Error() != "WRONGTYPE Operation against a key holding the wrong kind of value" {
+		t.Errorf("Expected 'WRONGTYPE' but got '%s'", err.Error())
+	}
+}
+
+func TestLPushMultiple(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	count, err := rdb.LPush(ctx, "arrKey1", "firstEntry", "second", "third").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Errorf("Expected '3' but got '%d'", count)
+	}
+}
+
+func TestLPushLPop(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	count, err := rdb.LPush(ctx, "arrKey2", "first", "second", "third").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Errorf("Expected '3' but got '%d'", count)
+	}
+
+	val, err := rdb.LPop(ctx, "arrKey2").Result()
+
+	if val != "third" {
+		t.Errorf("Expected 'third' but got '%s'", val)
+	}
+
+	val, err = rdb.LPop(ctx, "arrKey2").Result()
+
+	if val != "second" {
+		t.Errorf("Expected 'second' but got '%s'", val)
+	}
+
+	val, err = rdb.LPop(ctx, "arrKey2").Result()
+
+	if val != "first" {
+		t.Errorf("Expected 'first' but got '%s'", val)
+	}
+}
+
+func TestLPushLPopNonExist(t *testing.T) {
+	ctx := context.Background()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	_, err := rdb.LPop(ctx, "arrKeyDoesNotExistPop").Result()
+	if err == nil {
+		t.Fatal("Expected nil")
+	}
+	if err.Error() != "redis: nil" {
+		t.Errorf("Expected 'redis: nil' but got '%s'", err.Error())
 	}
 }
