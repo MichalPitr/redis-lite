@@ -43,10 +43,8 @@ func deserializeSimpleError(message string) (string, int, error) {
 }
 
 func serializeSimpleError(message string) (string, error) {
-	for _, c := range message {
-		if c == '\n' || c == '\r' {
-			return "", fmt.Errorf("CLRF characters are not allowed in simple errors.")
-		}
+	if strings.ContainsAny(message, "\r\n") {
+		return "", fmt.Errorf("CRLF characters are not allowed in simple errors")
 	}
 	return fmt.Sprintf("-%s\r\n", message), nil
 }

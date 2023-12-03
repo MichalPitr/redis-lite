@@ -70,7 +70,10 @@ func handleRequest(conn net.Conn, store *dictionary) {
 
 func handleEcho(arr []interface{}, conn net.Conn) {
 	msg := serializeBulkString(arr[1].(string))
-	conn.Write(([]byte(msg)))
+	if _, err := conn.Write([]byte(msg)); err != nil {
+		log.Println("Error writing to connection in handleEcho:", err)
+		return
+	}
 }
 
 func handleDel(arr []interface{}, conn net.Conn, store *dictionary) {
@@ -368,72 +371,65 @@ func recordExpired(recordExpiration int64) bool {
 }
 
 func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
+	// input validations
+	if len(arr) != 3 && len(arr) != 5 {
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
+		if _, err := conn.Write(([]byte(msg))); err != nil {
+			log.Println("Error writing to connection in handleSet:", err)
+			return
+		}
+		return
+	}
+
 	// -1 denotes no expiration is set.
 	var expiryTimestamp int64 = -1
 
 	if len(arr) == 5 {
-		switch arr[3].(string) {
-		case "EX", "ex":
+		var msg string
+		switch cmd := strings.ToLower(arr[3].(string)); cmd {
+		case "ex":
 			durationSeconds, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _ := serializeSimpleError("ERR 'EX' arguments has to be integer")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'EX' arguments has to be integer")
 			}
 			if durationSeconds <= 0 {
-				msg, _ := serializeSimpleError("ERR 'EX' option has to be positive")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'EX' option has to be positive")
 			}
 			expiryTimestamp = time.Now().UnixMilli() + durationSeconds*1000
-		case "PX", "px":
+		case "px":
 			durationMilli, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _ := serializeSimpleError("ERR 'PX' arguments has to be integer")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'PX' arguments has to be integer")
 			}
 			if durationMilli <= 0 {
-				msg, _ := serializeSimpleError("ERR 'PX' option has to be positive")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'PX' option has to be positive")
 			}
 			expiryTimestamp = time.Now().UnixMilli() + durationMilli
-		case "EXAT", "exat":
+		case "exat":
 			unixSeconds, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _ := serializeSimpleError("ERR 'EXAT' arguments has to be integer")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'EXAT' arguments has to be integer")
 			}
 			if unixSeconds <= 0 {
-				msg, _ := serializeSimpleError("ERR 'EXAT' option has to be positive")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'EXAT' option has to be positive")
 			}
 			expiryTimestamp = unixSeconds * 1000
-		case "PXAT", "pxat":
+		case "pxat":
 			unixMilli, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _ := serializeSimpleError("ERR 'PXAT' arguments has to be integer")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'PXAT' arguments has to be integer")
 			}
 			if unixMilli <= 0 {
-				msg, _ := serializeSimpleError("ERR 'PXAT' option has to be positive")
-				conn.Write(([]byte(msg)))
-				return
+				msg, _ = serializeSimpleError("ERR 'PXAT' option has to be positive")
 			}
 			expiryTimestamp = unixMilli
 		default:
-			msg, _ := serializeSimpleError("ERR unknown option for SET")
-			conn.Write(([]byte(msg)))
+			msg, _ = serializeSimpleError("ERR unknown option for SET")
+		}
+		if _, err := conn.Write(([]byte(msg))); err != nil {
+			log.Println("Error writing to connection in handleSet:", err)
 			return
 		}
-	} else if len(arr) != 3 {
-		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
-		conn.Write(([]byte(msg)))
-		return
 	}
 
 	(*store).mu.Lock()
