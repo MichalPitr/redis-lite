@@ -40,7 +40,7 @@ func TestSerializeSimpleString(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ans, _, _ := serializeSimpleString(test.input)
+			ans, _ := serializeSimpleString(test.input)
 			if ans != test.want {
 				t.Errorf("Got '%s' but expected '%s'.", ans, test.want)
 			}
@@ -60,7 +60,7 @@ func TestSerializeSimpleStringInvalid(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := serializeSimpleString(test.input)
+			_, err := serializeSimpleString(test.input)
 			if err == nil {
 				t.Errorf("Got no error but expected failure.")
 			}
@@ -100,7 +100,7 @@ func TestSerializeSimpleError(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ans, _, _ := serializeSimpleError(test.input)
+			ans, _ := serializeSimpleError(test.input)
 			if ans != test.want {
 				t.Errorf("Got '%s' but expected '%s'.", ans, test.want)
 			}
@@ -120,7 +120,7 @@ func TestSerializeSimpleErrorInvalid(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := serializeSimpleError(test.input)
+			_, err := serializeSimpleError(test.input)
 			if err == nil {
 				t.Errorf("Got no error but expected failure.")
 			}
@@ -209,7 +209,7 @@ func TestSerializeBulkString(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ans, _, _ := serializeBulkString(test.input)
+			ans := serializeBulkString(test.input)
 			if ans != test.want {
 				t.Errorf("Got '%s' but expected '%s'.", ans, test.want)
 			}

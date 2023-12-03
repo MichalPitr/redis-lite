@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // +OK\r\n
@@ -20,13 +21,11 @@ func deserializeSimpleString(message string) (string, int, error) {
 	return message[start:i], i + 2, nil
 }
 
-func serializeSimpleString(message string) (string, int, error) {
-	for _, c := range message {
-		if c == '\n' || c == '\r' {
-			return "", 0, fmt.Errorf("CLRF characters are not allowed in simple strings.")
-		}
+func serializeSimpleString(message string) (string, error) {
+	if strings.ContainsAny(message, "\r\n") {
+		return "", fmt.Errorf("CRLF characters are not allowed in simple strings")
 	}
-	return fmt.Sprintf("+%s\r\n", message), len(message), nil
+	return fmt.Sprintf("+%s\r\n", message), nil
 }
 
 func deserializeSimpleError(message string) (string, int, error) {
@@ -43,13 +42,13 @@ func deserializeSimpleError(message string) (string, int, error) {
 	return message[start:i], i + 2, nil
 }
 
-func serializeSimpleError(message string) (string, int, error) {
+func serializeSimpleError(message string) (string, error) {
 	for _, c := range message {
 		if c == '\n' || c == '\r' {
-			return "", 0, fmt.Errorf("CLRF characters are not allowed in simple errors.")
+			return "", fmt.Errorf("CLRF characters are not allowed in simple errors.")
 		}
 	}
-	return fmt.Sprintf("-%s\r\n", message), len(message), nil
+	return fmt.Sprintf("-%s\r\n", message), nil
 }
 
 func deserializeInteger(message string) (int, int, error) {
@@ -109,8 +108,8 @@ func deserializeBulkString(message string) (string, int, error) {
 	return message[i : i+int(length)], i + int(length) + 2, nil
 }
 
-func serializeBulkString(message string) (string, int, error) {
-	return fmt.Sprintf("$%d\r\n%s\r\n", len(message), message), len(message), nil
+func serializeBulkString(message string) string {
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(message), message)
 }
 
 func isNullBulkString(message string) (bool, error) {

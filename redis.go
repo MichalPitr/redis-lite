@@ -2,30 +2,33 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const port = 6379
+const activeExpireKeyLimit = 20
 
 func handleRequest(conn net.Conn, store *dictionary) {
 	defer conn.Close()
 
+	buf := make([]byte, 2048)
 	for {
-		buf := make([]byte, 2048)
 		n, err := conn.Read(buf)
 		if err != nil {
+			log.Printf("Closing connection: '%v'", err)
 			return
 		}
 
-		// deserialize command
 		input, _, err := deserializeNullOrArray(string(buf[:n]))
 		if err != nil {
-			msg, _, _ := serializeSimpleError("ERR - failed while deserializing input.")
+			msg, _ := serializeSimpleError("ERR - failed while deserializing input.")
 			conn.Write([]byte(msg))
 		}
 
@@ -33,29 +36,30 @@ func handleRequest(conn net.Conn, store *dictionary) {
 			log.Println("Received nil array.")
 		} else {
 			if arr, ok := input.([]interface{}); ok {
-				switch arr[0] {
-				case "PING", "ping":
+				cmd := strings.ToLower(arr[0].(string))
+				switch cmd {
+				case "ping":
 					handlePing(arr, conn)
-				case "ECHO", "echo":
+				case "echo":
 					handleEcho(arr, conn)
-				case "SET", "set":
+				case "set":
 					handleSet(arr, conn, store)
-				case "GET", "get":
+				case "get":
 					handleGet(arr, conn, store)
-				case "EXISTS", "exists":
+				case "exists":
 					handleExists(arr, conn, store)
-				case "DEL", "del":
+				case "del":
 					handleDel(arr, conn, store)
-				case "INCR", "incr":
+				case "incr":
 					handleIncr(arr, conn, store)
-				case "DECR", "decr":
+				case "decr":
 					handleDecr(arr, conn, store)
-				case "LPUSH", "lpush":
+				case "lpush":
 					handleLPush(arr, conn, store)
-				case "LPOP", "lpop":
+				case "lpop":
 					handleLPop(arr, conn, store)
 				default:
-					msg, _, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", arr[0].(string)))
+					msg, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", cmd))
 					conn.Write(([]byte(msg)))
 					continue
 				}
@@ -65,13 +69,13 @@ func handleRequest(conn net.Conn, store *dictionary) {
 }
 
 func handleEcho(arr []interface{}, conn net.Conn) {
-	msg, _, _ := serializeBulkString(arr[1].(string))
+	msg := serializeBulkString(arr[1].(string))
 	conn.Write(([]byte(msg)))
 }
 
 func handleDel(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'del' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'del' command")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -90,7 +94,7 @@ func handleDel(arr []interface{}, conn net.Conn, store *dictionary) {
 
 func handleExists(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'exists' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'exists' command")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -105,22 +109,32 @@ func handleExists(arr []interface{}, conn net.Conn, store *dictionary) {
 }
 
 func handlePing(arr []interface{}, conn net.Conn) {
-	if len(arr) == 1 {
-		msg, _, _ := serializeBulkString("PONG")
-		conn.Write([]byte(msg))
+	var msg string
+	var err error
+
+	switch len(arr) {
+	case 1:
+		msg, err = serializeSimpleString("PONG")
+	case 2:
+		msg = serializeBulkString(arr[1].(string))
+	default:
+		msg, err = serializeSimpleError("ERR wrong number of arguments for 'ping' command")
 	}
-	if len(arr) == 2 {
-		msg, _, _ := serializeBulkString(arr[1].(string))
-		conn.Write([]byte(msg))
-	} else {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'ping' command")
-		conn.Write([]byte(msg))
+
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	if _, err := conn.Write([]byte(msg)); err != nil {
+		log.Println("Error writing to connection in handlePing:", err)
+		return
 	}
 }
 
 func handleLPush(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'lpush' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'lpush' command")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -140,7 +154,7 @@ func handleLPush(arr []interface{}, conn net.Conn, store *dictionary) {
 
 	ll, ok := rec.value.(linkedList)
 	if ok == false {
-		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -170,7 +184,7 @@ func handleLPush(arr []interface{}, conn net.Conn, store *dictionary) {
 
 func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 || len(arr) > 3 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'lpop' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'lpop' command")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -187,7 +201,7 @@ func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 
 	ll, ok := rec.value.(linkedList)
 	if ok == false {
-		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -201,7 +215,7 @@ func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) == 3 {
 		parsedCount, err := strconv.ParseInt(arr[2].(string), 10, 64)
 		if err != nil {
-			msg, _, _ := serializeSimpleError("ERR internal error")
+			msg, _ := serializeSimpleError("ERR internal error")
 			conn.Write([]byte(msg))
 			return
 		}
@@ -230,7 +244,7 @@ func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 	}
 
 	if len(resultArr) == 1 {
-		msg, _, _ := serializeBulkString(resultArr[0])
+		msg := serializeBulkString(resultArr[0])
 		conn.Write([]byte(msg))
 		return
 	}
@@ -242,7 +256,7 @@ func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 
 func handleDecr(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'decr' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'decr' command")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -256,14 +270,14 @@ func handleDecr(arr []interface{}, conn net.Conn, store *dictionary) {
 	}
 	val, ok := rec.value.(string)
 	if ok == false {
-		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		conn.Write([]byte(msg))
 		return
 	}
 
 	num, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || num <= math.MinInt64 {
-		msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
+		msg, _ := serializeSimpleError("ERR value is not an integer or out of range")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -276,7 +290,7 @@ func handleDecr(arr []interface{}, conn net.Conn, store *dictionary) {
 
 func handleIncr(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'INCR' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'INCR' command")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -290,14 +304,14 @@ func handleIncr(arr []interface{}, conn net.Conn, store *dictionary) {
 	}
 	val, ok := rec.value.(string)
 	if ok == false {
-		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		conn.Write([]byte(msg))
 		return
 	}
 
 	num, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || num >= math.MaxInt64 {
-		msg, _, _ := serializeSimpleError("ERR value is not an integer or out of range")
+		msg, _ := serializeSimpleError("ERR value is not an integer or out of range")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -310,7 +324,7 @@ func handleIncr(arr []interface{}, conn net.Conn, store *dictionary) {
 
 func handleGet(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
 		conn.Write(([]byte(msg)))
 		return
 	}
@@ -327,7 +341,7 @@ func handleGet(arr []interface{}, conn net.Conn, store *dictionary) {
 
 	val, ok := rec.value.(string)
 	if ok == false {
-		msg, _, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		conn.Write([]byte(msg))
 		return
 	}
@@ -341,7 +355,7 @@ func handleGet(arr []interface{}, conn net.Conn, store *dictionary) {
 		return
 	}
 
-	msg, _, _ := serializeBulkString(val)
+	msg := serializeBulkString(val)
 	conn.Write(([]byte(msg)))
 	return
 }
@@ -362,12 +376,12 @@ func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 		case "EX", "ex":
 			durationSeconds, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _, _ := serializeSimpleError("ERR 'EX' arguments has to be integer")
+				msg, _ := serializeSimpleError("ERR 'EX' arguments has to be integer")
 				conn.Write(([]byte(msg)))
 				return
 			}
 			if durationSeconds <= 0 {
-				msg, _, _ := serializeSimpleError("ERR 'EX' option has to be positive")
+				msg, _ := serializeSimpleError("ERR 'EX' option has to be positive")
 				conn.Write(([]byte(msg)))
 				return
 			}
@@ -375,12 +389,12 @@ func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 		case "PX", "px":
 			durationMilli, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _, _ := serializeSimpleError("ERR 'PX' arguments has to be integer")
+				msg, _ := serializeSimpleError("ERR 'PX' arguments has to be integer")
 				conn.Write(([]byte(msg)))
 				return
 			}
 			if durationMilli <= 0 {
-				msg, _, _ := serializeSimpleError("ERR 'PX' option has to be positive")
+				msg, _ := serializeSimpleError("ERR 'PX' option has to be positive")
 				conn.Write(([]byte(msg)))
 				return
 			}
@@ -388,12 +402,12 @@ func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 		case "EXAT", "exat":
 			unixSeconds, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _, _ := serializeSimpleError("ERR 'EXAT' arguments has to be integer")
+				msg, _ := serializeSimpleError("ERR 'EXAT' arguments has to be integer")
 				conn.Write(([]byte(msg)))
 				return
 			}
 			if unixSeconds <= 0 {
-				msg, _, _ := serializeSimpleError("ERR 'EXAT' option has to be positive")
+				msg, _ := serializeSimpleError("ERR 'EXAT' option has to be positive")
 				conn.Write(([]byte(msg)))
 				return
 			}
@@ -401,23 +415,23 @@ func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 		case "PXAT", "pxat":
 			unixMilli, err := strconv.ParseInt(arr[4].(string), 10, 64)
 			if err != nil {
-				msg, _, _ := serializeSimpleError("ERR 'PXAT' arguments has to be integer")
+				msg, _ := serializeSimpleError("ERR 'PXAT' arguments has to be integer")
 				conn.Write(([]byte(msg)))
 				return
 			}
 			if unixMilli <= 0 {
-				msg, _, _ := serializeSimpleError("ERR 'PXAT' option has to be positive")
+				msg, _ := serializeSimpleError("ERR 'PXAT' option has to be positive")
 				conn.Write(([]byte(msg)))
 				return
 			}
 			expiryTimestamp = unixMilli
 		default:
-			msg, _, _ := serializeSimpleError("ERR unknown option for SET")
+			msg, _ := serializeSimpleError("ERR unknown option for SET")
 			conn.Write(([]byte(msg)))
 			return
 		}
 	} else if len(arr) != 3 {
-		msg, _, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
+		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'set' command")
 		conn.Write(([]byte(msg)))
 		return
 	}
@@ -426,7 +440,7 @@ func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 	(*store).dict[arr[1].(string)] = record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
 	(*store).mu.Unlock()
 
-	msg, _, _ := serializeSimpleString("OK")
+	msg, _ := serializeSimpleString("OK")
 	conn.Write(([]byte(msg)))
 }
 
@@ -436,8 +450,8 @@ func activeKeyExpirer(store *dictionary) {
 		expired := 0
 		total := 0
 		keys := make([]string, 0)
-		(*store).mu.Lock()
-		for k, v := range (*store).dict {
+		store.mu.Lock()
+		for k, v := range store.dict {
 			if v.expiryTimestamp == -1 {
 				continue
 			}
@@ -447,16 +461,16 @@ func activeKeyExpirer(store *dictionary) {
 			}
 			total++
 
-			if total >= 20 {
+			if total >= activeExpireKeyLimit {
 				break
 			}
 		}
 
 		for _, k := range keys {
-			delete((*store).dict, k)
+			delete(store.dict, k)
 		}
 
-		(*store).mu.Unlock()
+		store.mu.Unlock()
 
 		if float64(expired)/float64(total) < 0.25 {
 			time.Sleep(100 * time.Millisecond)
@@ -465,9 +479,14 @@ func activeKeyExpirer(store *dictionary) {
 }
 
 func main() {
-	// Sets the log file
-	file, err := os.OpenFile("redis.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
-	log.SetOutput(file)
+	// Sets up logging
+	file, err := os.OpenFile("redis.log", os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		fmt.Fprint(os.Stderr, "Failed to open a file, exiting.")
+		os.Exit(1)
+	}
+	multiWriter := io.MultiWriter(file, os.Stdout)
+	log.SetOutput(multiWriter)
 
 	address := fmt.Sprintf("0.0.0.0:%d", port)
 	listener, err := net.Listen("tcp", address)
@@ -486,7 +505,7 @@ func main() {
 		// Accept a connection
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Fatal("Error accepting: ", err.Error())
+			log.Fatal("Error accepting:", err.Error())
 		}
 		go handleRequest(conn, store)
 	}
