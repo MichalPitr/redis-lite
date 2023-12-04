@@ -140,8 +140,8 @@ func deserializeNullOrArray(message string) (interface{}, int, error) {
 	return deserializeArray(message)
 }
 
-func serializeNullArray() (string, int, error) {
-	return "*-1\r\n", 5, nil
+func serializeNullArray() string {
+	return "*-1\r\n"
 }
 
 func serializeNullBulkString() (string, int, error) {

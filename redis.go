@@ -28,8 +28,8 @@ func handleRequest(conn net.Conn, store *dictionary) {
 
 		input, _, err := deserializeNullOrArray(string(buf[:n]))
 		if err != nil {
-			msg, _ := serializeSimpleError("ERR - failed while deserializing input.")
-			conn.Write([]byte(msg))
+			sendErrorToClient(conn, "ERR - failed while deserializing input")
+			return
 		}
 
 		if input == nil {
@@ -60,7 +60,7 @@ func handleRequest(conn net.Conn, store *dictionary) {
 					handleLPop(arr, conn, store)
 				default:
 					msg, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", cmd))
-					conn.Write(([]byte(msg)))
+					sendMsgToClient(conn, msg)
 					continue
 				}
 			}
@@ -70,45 +70,41 @@ func handleRequest(conn net.Conn, store *dictionary) {
 
 func handleEcho(arr []interface{}, conn net.Conn) {
 	msg := serializeBulkString(arr[1].(string))
-	if _, err := conn.Write([]byte(msg)); err != nil {
-		log.Println("Error writing to connection in handleEcho:", err)
-		return
-	}
+	sendMsgToClient(conn, msg)
 }
 
 func handleDel(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
-		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'del' command")
-		conn.Write([]byte(msg))
+		sendErrorToClient(conn, "ERR wrong number of arguments for 'del' command")
 		return
 	}
 	count := 0
-	(*store).mu.Lock()
+	store.mu.Lock()
 	for _, key := range arr[1:] {
-		if _, ok := (*store).dict[key.(string)]; ok {
+		if _, ok := store.dict[key.(string)]; ok {
 			count++
-			delete((*store).dict, key.(string))
+			delete(store.dict, key.(string))
 		}
 	}
-	(*store).mu.Unlock()
+	store.mu.Unlock()
 	msg, _, _ := serializeInteger(int64(count))
-	conn.Write([]byte(msg))
+	sendMsgToClient(conn, msg)
 }
 
 func handleExists(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
 		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'exists' command")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 	count := 0
 	for _, key := range arr[1:] {
-		if _, ok := (*store).dict[key.(string)]; ok {
+		if _, ok := store.dict[key.(string)]; ok {
 			count++
 		}
 	}
 	msg, _, _ := serializeInteger(int64(count))
-	conn.Write([]byte(msg))
+	sendMsgToClient(conn, msg)
 }
 
 func handlePing(arr []interface{}, conn net.Conn) {
@@ -129,36 +125,33 @@ func handlePing(arr []interface{}, conn net.Conn) {
 		return
 	}
 
-	if _, err := conn.Write([]byte(msg)); err != nil {
-		log.Println("Error writing to connection in handlePing:", err)
-		return
-	}
+	sendMsgToClient(conn, msg)
 }
 
 func handleLPush(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
 		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'lpush' command")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 
-	(*store).mu.Lock()
-	defer (*store).mu.Unlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
 	// Add logic to initialize LL if it doesn't exist
-	rec, ok := (*store).dict[arr[1].(string)]
-	if ok == false {
+	rec, ok := store.dict[arr[1].(string)]
+	if !ok {
 		// initialize Linked List
 		rec = record{value: linkedList{
 			length: 0},
 			expiryTimestamp: -1}
-		(*store).dict[arr[1].(string)] = rec
+		store.dict[arr[1].(string)] = rec
 	}
 
 	ll, ok := rec.value.(linkedList)
-	if ok == false {
+	if !ok {
 		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 
@@ -177,40 +170,39 @@ func handleLPush(arr []interface{}, conn net.Conn, store *dictionary) {
 			ll.tail = &node
 		}
 		rec.value = ll
-		(*store).dict[arr[1].(string)] = rec
+		store.dict[arr[1].(string)] = rec
 	}
 
 	msg, _, _ := serializeInteger(int64(ll.length))
-	conn.Write([]byte(msg))
-	return
+	sendMsgToClient(conn, msg)
 }
 
 func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 || len(arr) > 3 {
 		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'lpop' command")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 
-	(*store).mu.Lock()
-	defer (*store).mu.Unlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
-	rec, ok := (*store).dict[arr[1].(string)]
-	if ok == false {
-		msg, _, _ := serializeNullArray()
-		conn.Write([]byte(msg))
+	rec, ok := store.dict[arr[1].(string)]
+	if !ok {
+		msg := serializeNullArray()
+		sendMsgToClient(conn, msg)
 		return
 	}
 
 	ll, ok := rec.value.(linkedList)
-	if ok == false {
+	if !ok {
 		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 	if ll.length == 0 {
-		msg, _, _ := serializeNullArray()
-		conn.Write([]byte(msg))
+		msg := serializeNullArray()
+		sendMsgToClient(conn, msg)
 		return
 	}
 
@@ -219,7 +211,7 @@ func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 		parsedCount, err := strconv.ParseInt(arr[2].(string), 10, 64)
 		if err != nil {
 			msg, _ := serializeSimpleError("ERR internal error")
-			conn.Write([]byte(msg))
+			sendMsgToClient(conn, msg)
 			return
 		}
 		count = int(parsedCount)
@@ -241,126 +233,131 @@ func handleLPop(arr []interface{}, conn net.Conn, store *dictionary) {
 
 		// Write back ll to map
 		rec.value = ll
-		(*store).dict[arr[1].(string)] = rec
+		store.dict[arr[1].(string)] = rec
 
 		resultArr[i] = val
 	}
 
 	if len(resultArr) == 1 {
 		msg := serializeBulkString(resultArr[0])
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 
 	msg, _, _ := serializeStringArray(resultArr)
-	conn.Write([]byte(msg))
-	return
+	sendMsgToClient(conn, msg)
 }
 
 func handleDecr(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
 		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'decr' command")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
-	(*store).mu.Lock()
-	defer (*store).mu.Unlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
-	rec, ok := (*store).dict[arr[1].(string)]
-	if ok == false {
+	rec, ok := store.dict[arr[1].(string)]
+	if !ok {
 		rec = record{"0", -1}
-		(*store).dict[arr[1].(string)] = rec
+		store.dict[arr[1].(string)] = rec
 	}
 	val, ok := rec.value.(string)
-	if ok == false {
+	if !ok {
 		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 
 	num, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || num <= math.MinInt64 {
 		msg, _ := serializeSimpleError("ERR value is not an integer or out of range")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 	num--
-	(*store).dict[arr[1].(string)] = record{fmt.Sprint(num), rec.expiryTimestamp}
+	store.dict[arr[1].(string)] = record{fmt.Sprint(num), rec.expiryTimestamp}
 	msg, _, _ := serializeInteger(num)
-	conn.Write([]byte(msg))
-	return
+	sendMsgToClient(conn, msg)
 }
 
 func handleIncr(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
 		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'INCR' command")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
-	(*store).mu.Lock()
-	defer (*store).mu.Unlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
-	rec, ok := (*store).dict[arr[1].(string)]
-	if ok == false {
+	rec, ok := store.dict[arr[1].(string)]
+	if !ok {
 		rec = record{"0", -1}
-		(*store).dict[arr[1].(string)] = rec
+		store.dict[arr[1].(string)] = rec
 	}
 	val, ok := rec.value.(string)
-	if ok == false {
+	if !ok {
 		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 
 	num, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || num >= math.MaxInt64 {
 		msg, _ := serializeSimpleError("ERR value is not an integer or out of range")
-		conn.Write([]byte(msg))
+		sendMsgToClient(conn, msg)
 		return
 	}
 	num++
-	(*store).dict[arr[1].(string)] = record{fmt.Sprint(num), rec.expiryTimestamp}
+	store.dict[arr[1].(string)] = record{fmt.Sprint(num), rec.expiryTimestamp}
 	msg, _, _ := serializeInteger(num)
-	conn.Write([]byte(msg))
-	return
+	sendMsgToClient(conn, msg)
 }
 
 func handleGet(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) != 2 {
-		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'get' command")
-		conn.Write(([]byte(msg)))
+		sendErrorToClient(conn, "ERR wrong number of arguments for 'get' command")
 		return
 	}
 
-	(*store).mu.Lock()
-	defer (*store).mu.Unlock()
-	rec, ok := (*store).dict[arr[1].(string)]
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key, ok := arr[1].(string)
+	if !ok {
+		sendErrorToClient(conn, "ERR wrong argument type")
+		return
+	}
 
-	if ok == false {
-		msg, _, _ := serializeNullArray()
-		conn.Write(([]byte(msg)))
+	rec, ok := store.dict[key]
+	if !ok {
+		msg := serializeNullArray()
+		sendMsgToClient(conn, msg)
 		return
 	}
 
 	val, ok := rec.value.(string)
-	if ok == false {
-		msg, _ := serializeSimpleError("WRONGTYPE Operation against a key holding the wrong kind of value")
-		conn.Write([]byte(msg))
+	if !ok {
+		sendErrorToClient(conn, "WRONGTYPE Operation against a key holding the wrong kind of value")
 		return
 	}
 
 	// delete expired key and return nil, since the key doesn't exist anymore.
 	if recordExpired(rec.expiryTimestamp) {
-		delete(*&store.dict, arr[1].(string))
+		delete(store.dict, key)
 
-		msg, _, _ := serializeNullArray()
-		conn.Write(([]byte(msg)))
+		msg := serializeNullArray()
+		sendMsgToClient(conn, msg)
 		return
 	}
 
 	msg := serializeBulkString(val)
-	conn.Write(([]byte(msg)))
-	return
+	sendMsgToClient(conn, msg)
+}
+
+func sendMsgToClient(conn net.Conn, msg string) {
+	if _, err := conn.Write(([]byte(msg))); err != nil {
+		log.Println("Error writing to connection:", err)
+	}
 }
 
 func recordExpired(recordExpiration int64) bool {
@@ -372,9 +369,7 @@ func recordExpired(recordExpiration int64) bool {
 
 func sendErrorToClient(conn net.Conn, errMsg string) {
 	msg, _ := serializeSimpleError(errMsg)
-	if _, err := conn.Write(([]byte(msg))); err != nil {
-		log.Println("Error writing to connection:", err)
-	}
+	sendMsgToClient(conn, msg)
 }
 
 func parseExpiryTimestamp(exCmd string, exTime string) (int64, error) {
@@ -428,15 +423,12 @@ func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 		}
 	}
 
-	(*store).mu.Lock()
-	(*store).dict[arr[1].(string)] = record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
-	(*store).mu.Unlock()
+	store.mu.Lock()
+	store.dict[arr[1].(string)] = record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
+	store.mu.Unlock()
 
 	msg, _ := serializeSimpleString("OK")
-	if _, err := conn.Write(([]byte(msg))); err != nil {
-		log.Println("Error writing to connection in handleSet:", err)
-		return
-	}
+	sendMsgToClient(conn, msg)
 }
 
 // Locks the store while cleaning up - Not sure about the perf impact.
