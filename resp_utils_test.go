@@ -132,7 +132,7 @@ func TestDeserializeInteger(t *testing.T) {
 	var tests = []struct {
 		name  string
 		input string
-		want  int
+		want  int64
 	}{
 		// the table itself
 		{"Should deserialize unsigned integer", ":1000\r\n", 1000},
@@ -246,7 +246,7 @@ func TestDeserializeNullOrArray(t *testing.T) {
 	}{
 		// the table itself
 		{"Should deserialize array", "*2\r\n$4\r\necho\r\n$11\r\nhello world\r\n", []interface{}{"echo", "hello world"}},
-		{"Should deserialize multi-type array", "*4\r\n:+123\r\n-ERR\r\n+OK\r\n$-1\r\n", []interface{}{123, "ERR", "OK", nil}},
+		{"Should deserialize multi-type array", "*4\r\n:+123\r\n-ERR\r\n+OK\r\n$-1\r\n", []interface{}{int64(123), "ERR", "OK", nil}},
 		{"Should deserialize empty array", "*0\r\n", []interface{}{}},
 		{"Should deserialize nil array", "*-1\r\n", nil},
 	}

@@ -8,17 +8,24 @@ import (
 
 // +OK\r\n
 func deserializeSimpleString(message string) (string, int, error) {
-	if message[0] != '+' {
-		return "", 0, fmt.Errorf("Expected a simple string startin with '+' but got '%c'", message[0])
+	if len(message) < 3 {
+		return "", 0, fmt.Errorf("message is too short")
 	}
 
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
+	if message[0] != '+' {
+		return "", 0, fmt.Errorf("expected a simple string starting with '+' but got: %.10q", message)
+	}
+
+	i := 1
+	for i < len(message) && !(message[i] == '\r' && message[i+1] == '\n') {
 		i++
 	}
 
-	return message[start:i], i + 2, nil
+	if i >= len(message) {
+		return "", 0, fmt.Errorf("malformed message, CRLF not found")
+	}
+
+	return message[1:i], i + 2, nil
 }
 
 func serializeSimpleString(message string) (string, error) {
@@ -29,17 +36,24 @@ func serializeSimpleString(message string) (string, error) {
 }
 
 func deserializeSimpleError(message string) (string, int, error) {
-	if message[0] != '-' {
-		return "", 0, fmt.Errorf("Expected a simple error startin with '-' but got '%c'", message[0])
+	if len(message) < 3 {
+		return "", 0, fmt.Errorf("message is too short")
 	}
 
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
+	if message[0] != '-' {
+		return "", 0, fmt.Errorf("Expected a simple error starting with '-' but got '%.10q'", message[0])
+	}
+
+	i := 1
+	for i < len(message) && !(message[i] == '\r' && message[i+1] == '\n') {
 		i++
 	}
 
-	return message[start:i], i + 2, nil
+	if i >= len(message) {
+		return "", 0, fmt.Errorf("malformed message, CRLF not found")
+	}
+
+	return message[1:i], i + 2, nil
 }
 
 func serializeSimpleError(message string) (string, error) {
@@ -49,23 +63,27 @@ func serializeSimpleError(message string) (string, error) {
 	return fmt.Sprintf("-%s\r\n", message), nil
 }
 
-func deserializeInteger(message string) (int, int, error) {
-	if message[0] != ':' {
-		return 0, 0, fmt.Errorf("Expected a integer to begin with ':' but got '%c'", message[0])
+func deserializeInteger(message string) (int64, int, error) {
+	if len(message) < 3 {
+		return 0, 0, fmt.Errorf("message is too short")
 	}
 
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
+	if message[0] != ':' {
+		return 0, 0, fmt.Errorf("Expected a integer to begin with ':' but got '%.10q'", message[0])
+	}
+
+	i := 1
+	for i < len(message) && !(message[i] == '\r' && message[i+1] == '\n') {
 		i++
 	}
 
-	num, err := strconv.ParseInt(message[start:i], 10, 32)
+	// Redis is uses 64-bit integers.
+	num, err := strconv.ParseInt(message[1:i], 10, 64)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	return int(num), i + 2, nil
+	return num, i + 2, nil
 }
 
 func serializeInteger(num int64) (string, int, error) {
@@ -74,6 +92,9 @@ func serializeInteger(num int64) (string, int, error) {
 }
 
 func deserializeNullOrBulkString(message string) (interface{}, int, error) {
+	if len(message) < 5 {
+		return "", 0, fmt.Errorf("Message is too short to be a bulk string: '%.10q'", message)
+	}
 	if message[0] != '$' {
 		return "", 0, fmt.Errorf("Expected bulk string to begin with '$' but got '%c'", message[0])
 	}
@@ -90,18 +111,31 @@ func deserializeNullOrBulkString(message string) (interface{}, int, error) {
 }
 
 func deserializeBulkString(message string) (string, int, error) {
-	// decode string length
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
+	if len(message) < 5 {
+		return "", 0, fmt.Errorf("message is too short")
+	}
+
+	i := 1
+	for i < len(message) && !(message[i] == '\r' && message[i+1] == '\n') {
 		i++
 	}
-	length, err := strconv.ParseInt(message[start:i], 10, 32)
+
+	// TODO: Handle very large bulk strings. Redis limits them by default to 512MB.
+	length, err := strconv.ParseInt(message[1:i], 10, 64)
 	if err != nil {
 		return "", 0, fmt.Errorf("Failed to decode bulk string length: %v", err)
 	}
+	if length < 0 {
+		return "", 0, fmt.Errorf("Bulk strings cannot have negative length")
+	}
+	if length > 512_000_000 {
+		return "", 0, fmt.Errorf("Bulk strings are limited to 512MB")
+	}
 
-	// Skip over CLRF after string length
+	if message[i] != '\r' && message[i+1] != '\n' {
+		return "", 0, fmt.Errorf("Bulk string must end with CRLF")
+	}
+	// Skip over CRLF after string length
 	i += 2
 	return message[i : i+int(length)], i + int(length) + 2, nil
 }
@@ -111,16 +145,14 @@ func serializeBulkString(message string) string {
 }
 
 func isNullBulkString(message string) (bool, error) {
-	if message[0] != '$' {
-		return false, fmt.Errorf("Expected bulk string to begin with '$' but got '%c'", message[0])
+	if len(message) < 5 {
+		return false, fmt.Errorf("Message is too short to be a bulk string")
 	}
-
+	if message[0] != '$' {
+		return false, fmt.Errorf("Expected bulk string to begin with '$' but got '%.10q'", message[0])
+	}
 	if message[1] == '-' && message[2] == '1' {
 		return true, nil
-	}
-
-	if message[1] == '-' {
-		return false, fmt.Errorf("Only negative 1 is allowed in bulk strings to indicate null string.")
 	}
 	return false, nil
 }

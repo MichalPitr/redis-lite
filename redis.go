@@ -93,8 +93,7 @@ func handleDel(arr []interface{}, conn net.Conn, store *dictionary) {
 
 func handleExists(arr []interface{}, conn net.Conn, store *dictionary) {
 	if len(arr) < 2 {
-		msg, _ := serializeSimpleError("ERR wrong number of arguments for 'exists' command")
-		sendMsgToClient(conn, msg)
+		sendErrorToClient(conn, "ERR wrong number of arguments for 'exists' command")
 		return
 	}
 	count := 0
@@ -354,49 +353,6 @@ func handleGet(arr []interface{}, conn net.Conn, store *dictionary) {
 	sendMsgToClient(conn, msg)
 }
 
-func sendMsgToClient(conn net.Conn, msg string) {
-	if _, err := conn.Write(([]byte(msg))); err != nil {
-		log.Println("Error writing to connection:", err)
-	}
-}
-
-func recordExpired(recordExpiration int64) bool {
-	if recordExpiration == -1 {
-		return false
-	}
-	return recordExpiration < time.Now().UnixMilli()
-}
-
-func sendErrorToClient(conn net.Conn, errMsg string) {
-	msg, _ := serializeSimpleError(errMsg)
-	sendMsgToClient(conn, msg)
-}
-
-func parseExpiryTimestamp(exCmd string, exTime string) (int64, error) {
-	var expiryTimestamp int64
-	duration, err := strconv.ParseInt(exTime, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("ERR expiration argument has to be an integer")
-	}
-	if duration <= 0 {
-		return 0, fmt.Errorf("ERR expiration argument has to be positive")
-	}
-
-	switch cmd := strings.ToLower(exCmd); cmd {
-	case "ex":
-		expiryTimestamp = time.Now().UnixMilli() + duration*1000
-	case "px":
-		expiryTimestamp = time.Now().UnixMilli() + duration
-	case "exat":
-		expiryTimestamp = duration * 1000
-	case "pxat":
-		expiryTimestamp = duration
-	default:
-		return 0, fmt.Errorf("ERR unknown option for SET")
-	}
-	return expiryTimestamp, nil
-}
-
 func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 	// input validations
 	if len(arr) != 3 && len(arr) != 5 {
@@ -429,6 +385,49 @@ func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
 
 	msg, _ := serializeSimpleString("OK")
 	sendMsgToClient(conn, msg)
+}
+
+func sendMsgToClient(conn net.Conn, msg string) {
+	if _, err := conn.Write(([]byte(msg))); err != nil {
+		log.Println("Error writing to connection:", err)
+	}
+}
+
+func sendErrorToClient(conn net.Conn, errMsg string) {
+	msg, _ := serializeSimpleError(errMsg)
+	sendMsgToClient(conn, msg)
+}
+
+func recordExpired(recordExpiration int64) bool {
+	if recordExpiration == -1 {
+		return false
+	}
+	return recordExpiration < time.Now().UnixMilli()
+}
+
+func parseExpiryTimestamp(exCmd string, exTime string) (int64, error) {
+	var expiryTimestamp int64
+	duration, err := strconv.ParseInt(exTime, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("ERR expiration argument has to be an integer")
+	}
+	if duration <= 0 {
+		return 0, fmt.Errorf("ERR expiration argument has to be positive")
+	}
+
+	switch cmd := strings.ToLower(exCmd); cmd {
+	case "ex":
+		expiryTimestamp = time.Now().UnixMilli() + duration*1000
+	case "px":
+		expiryTimestamp = time.Now().UnixMilli() + duration
+	case "exat":
+		expiryTimestamp = duration * 1000
+	case "pxat":
+		expiryTimestamp = duration
+	default:
+		return 0, fmt.Errorf("ERR unknown option for SET")
+	}
+	return expiryTimestamp, nil
 }
 
 // Locks the store while cleaning up - Not sure about the perf impact.
