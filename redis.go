@@ -17,8 +17,8 @@ const activeExpireKeyLimit = 20
 
 func handleRequest(conn net.Conn, store *dictionary) {
 	defer conn.Close()
-
-	buf := make([]byte, 2048)
+	// TODO: Find a way to support long messages without allocating 512MB. Most messages are short.
+	buf := make([]byte, 512*1024*1024)
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
@@ -353,40 +353,6 @@ func handleGet(arr []interface{}, conn net.Conn, store *dictionary) {
 	sendMsgToClient(conn, msg)
 }
 
-func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
-	// input validations
-	if len(arr) != 3 && len(arr) != 5 {
-		sendErrorToClient(conn, "ERR wrong number of arguments for 'set' command")
-		return
-	}
-
-	// -1 denotes no expiration is set.
-	var expiryTimestamp int64 = -1
-
-	if len(arr) == 5 {
-		exCmd, ok1 := arr[3].(string)
-		exTime, ok2 := arr[4].(string)
-		if !ok1 || !ok2 {
-			log.Println("Invalid argument type")
-			sendErrorToClient(conn, "ERR invalid argument type")
-			return
-		}
-
-		var err error
-		expiryTimestamp, err = parseExpiryTimestamp(exCmd, exTime)
-		if err != nil {
-			sendErrorToClient(conn, err.Error())
-		}
-	}
-
-	store.mu.Lock()
-	store.dict[arr[1].(string)] = record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
-	store.mu.Unlock()
-
-	msg, _ := serializeSimpleString("OK")
-	sendMsgToClient(conn, msg)
-}
-
 func sendMsgToClient(conn net.Conn, msg string) {
 	if _, err := conn.Write(([]byte(msg))); err != nil {
 		log.Println("Error writing to connection:", err)
@@ -428,6 +394,40 @@ func parseExpiryTimestamp(exCmd string, exTime string) (int64, error) {
 		return 0, fmt.Errorf("ERR unknown option for SET")
 	}
 	return expiryTimestamp, nil
+}
+
+func handleSet(arr []interface{}, conn net.Conn, store *dictionary) {
+	// input validations
+	if len(arr) != 3 && len(arr) != 5 {
+		sendErrorToClient(conn, "ERR wrong number of arguments for 'set' command")
+		return
+	}
+
+	// -1 denotes no expiration is set.
+	var expiryTimestamp int64 = -1
+
+	if len(arr) == 5 {
+		exCmd, ok1 := arr[3].(string)
+		exTime, ok2 := arr[4].(string)
+		if !ok1 || !ok2 {
+			log.Println("Invalid argument type")
+			sendErrorToClient(conn, "ERR invalid argument type")
+			return
+		}
+
+		var err error
+		expiryTimestamp, err = parseExpiryTimestamp(exCmd, exTime)
+		if err != nil {
+			sendErrorToClient(conn, err.Error())
+		}
+	}
+
+	store.mu.Lock()
+	store.dict[arr[1].(string)] = record{value: arr[2].(string), expiryTimestamp: expiryTimestamp}
+	store.mu.Unlock()
+
+	msg, _ := serializeSimpleString("OK")
+	sendMsgToClient(conn, msg)
 }
 
 // Locks the store while cleaning up - Not sure about the perf impact.

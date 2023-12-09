@@ -181,29 +181,37 @@ func serializeNullBulkString() (string, int, error) {
 }
 
 func deserializeArray(message string) ([]interface{}, int, error) {
+	if len(message) < 3 {
+		return nil, 0, fmt.Errorf("message is too short")
+	}
+
 	if message[0] != '*' {
-		return []interface{}{}, 0, fmt.Errorf("Expected array to begin with '*' but got '%c'", message[0])
+		return []interface{}{}, 0, fmt.Errorf("Expected array to begin with '*' but got '%.10q'", message)
 	}
 
 	// determine array length
-	start := 1
-	i := start
-	for message[i] != '\r' && message[i+1] != '\n' {
+	i := 1
+	for i < len(message) && !(message[i] == '\r' && message[i+1] == '\n') {
 		i++
 	}
-	length, err := strconv.ParseInt(message[start:i], 10, 32)
+	length, err := strconv.ParseInt(message[1:i], 10, 64)
 	if err != nil {
 		return []interface{}{}, 0, fmt.Errorf("Failed to decode bulk string length: %v", err)
 	}
 	if length < 0 {
-		return []interface{}{}, 0, fmt.Errorf("Array langth can't be negative %v", err)
+		return []interface{}{}, 0, fmt.Errorf("Array langth can't be negative")
 	}
 
+	if message[i] != '\r' || message[i+1] != '\n' {
+		return []interface{}{}, 0, fmt.Errorf("Array length must be followed by CRLF")
+
+	}
 	// step over CRLF
 	i += 2
 
-	arr := make([]interface{}, length)
-	for idx := 0; idx < int(length); idx++ {
+	arrLength := int(length)
+	arr := make([]interface{}, arrLength)
+	for idx := 0; idx < arrLength; idx++ {
 		val, s, err := deserializePrimitive(message[i:])
 		if err != nil {
 			return nil, 0, err
@@ -211,7 +219,7 @@ func deserializeArray(message string) ([]interface{}, int, error) {
 		i += s
 		arr[idx] = val
 	}
-	return arr, i - start, nil
+	return arr, i, nil
 }
 
 func serializeStringArray(arr []string) (string, int, error) {
