@@ -18,52 +18,62 @@ const activeExpireKeyLimit = 20
 func handleRequest(conn net.Conn, store *dictionary) {
 	defer conn.Close()
 	// TODO: Find a way to support long messages without allocating 512MB. Most messages are short.
-	buf := make([]byte, 512*1024*1024)
+	var buffer []byte
+	buf := make([]byte, 1024)
+
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-			log.Printf("Closing connection: '%v'", err)
+			if err == io.EOF {
+				return
+			}
+			fmt.Println("Error reading from client:", err)
 			return
 		}
 
-		input, _, err := deserializeNullOrArray(string(buf[:n]))
-		if err != nil {
-			sendErrorToClient(conn, "ERR - failed while deserializing input")
-			return
-		}
+		buffer = append(buffer, buf[:n]...)
 
-		if input == nil {
-			log.Println("Received nil array.")
-		} else {
-			if arr, ok := input.([]interface{}); ok {
-				cmd := strings.ToLower(arr[0].(string))
-				switch cmd {
-				case "ping":
-					handlePing(arr, conn)
-				case "echo":
-					handleEcho(arr, conn)
-				case "set":
-					handleSet(arr, conn, store)
-				case "get":
-					handleGet(arr, conn, store)
-				case "exists":
-					handleExists(arr, conn, store)
-				case "del":
-					handleDel(arr, conn, store)
-				case "incr":
-					handleIncr(arr, conn, store)
-				case "decr":
-					handleDecr(arr, conn, store)
-				case "lpush":
-					handleLPush(arr, conn, store)
-				case "lpop":
-					handleLPop(arr, conn, store)
-				default:
-					msg, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", cmd))
-					sendMsgToClient(conn, msg)
-					continue
+		if len(buffer) >= 2 && buffer[len(buffer)-2] == '\r' && buffer[len(buffer)-1] == '\n' {
+			input, _, err := deserializeNullOrArray(string(buf[:n]))
+			if err != nil {
+				sendErrorToClient(conn, "ERR - failed while deserializing input")
+				return
+			}
+
+			if input == nil {
+				log.Println("Received nil array.")
+			} else {
+				if arr, ok := input.([]interface{}); ok {
+					cmd := strings.ToLower(arr[0].(string))
+					switch cmd {
+					case "ping":
+						handlePing(arr, conn)
+					case "echo":
+						handleEcho(arr, conn)
+					case "set":
+						handleSet(arr, conn, store)
+					case "get":
+						handleGet(arr, conn, store)
+					case "exists":
+						handleExists(arr, conn, store)
+					case "del":
+						handleDel(arr, conn, store)
+					case "incr":
+						handleIncr(arr, conn, store)
+					case "decr":
+						handleDecr(arr, conn, store)
+					case "lpush":
+						handleLPush(arr, conn, store)
+					case "lpop":
+						handleLPop(arr, conn, store)
+					default:
+						msg, _ := serializeSimpleError(fmt.Sprintf("-ERR unknown command '%s'", cmd))
+						sendMsgToClient(conn, msg)
+					}
 				}
 			}
+			// Clear buffer for the next message
+			buffer = nil
 		}
 	}
 }
